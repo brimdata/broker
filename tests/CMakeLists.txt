@@ -16,6 +16,7 @@ set(tests
   cpp/detail/meta_data_writer.cc
   cpp/integration.cc
   cpp/master.cc
+  cpp/multi_hop_routing.cc
   cpp/publisher.cc
   cpp/radix_tree.cc
   cpp/ssl.cc

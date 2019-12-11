@@ -149,11 +149,18 @@ public:
     }
   }
 
-  void handle_publication(std::set<peer_id>& receivers, data_message msg) {
+  void handle_publication(std::set<peer_id>& receivers, data_message msg,
+                          uint16_t ttl) {
     if (receivers.erase(dref().id()) > 0) {
       // TODO: ship to local subscribers
     }
-    ship(receivers, msg);
+    if (!receivers.empty()) {
+      if (--ttl == 0) {
+        BROKER_WARNING("drop published message: TTL expired");
+        return;
+      }
+      ship(receivers, msg, ttl);
+    }
   }
 
   void publish(data_message msg) {
@@ -168,7 +175,7 @@ public:
       puts("no subscribers found for topic");
       return;
     }
-    ship(receivers, msg);
+    ship(receivers, msg, initial_ttl_);
   }
 
   const auto& tbl() const noexcept {
@@ -185,7 +192,8 @@ public:
 
 private:
   /// Forwards `msg` to all `receivers`.
-  void ship(const std::set<peer_id_type>& receivers, data_message& msg) {
+  void ship(const std::set<peer_id_type>& receivers, data_message& msg,
+            uint16_t ttl) {
     // Use one bucket for each direct connection. Then put all receivers into
     // the bucket with the shortest path to that receiver. On a tie, we pick
     // the alphabetically first bucket.
@@ -225,7 +233,7 @@ private:
     for (auto& [first_hop, entry] : buckets) {
       auto& [hdl, bucket] = entry;
       if (!bucket.empty())
-        dref().send(hdl, atom::publish::value, std::move(bucket), msg);
+        dref().send(hdl, atom::publish::value, std::move(bucket), msg, ttl);
     }
   }
 
@@ -235,6 +243,9 @@ private:
 
   /// Stores routing information for reaching other peers.
   routing_table_type tbl_;
+
+  /// Initial TTL count.
+  uint16_t initial_ttl_ = 20;
 
   /// A logical timestamp.
   uint64_t timestamp_ = 0;
@@ -383,14 +394,14 @@ TEST(topologies with loops resolve to simple forwarding tables) {
   MESSAGE("publishing to foo on A will send through C");
   anon_send(peers["A"], atom::publish::value, make_data_message("foo", 42));
   expect((atom_value, data_message), from(_).to(peers["A"]));
-  expect((atom_value, peer_set, data_message),
+  expect((atom_value, peer_set, data_message, uint16_t),
          from(peers["A"])
            .to(peers["C"])
-           .with(_, peer_set{"G"}, make_data_message("foo", 42)));
-  expect((atom_value, peer_set, data_message),
+           .with(_, peer_set{"G"}, make_data_message("foo", 42), 20u));
+  expect((atom_value, peer_set, data_message, uint16_t),
          from(peers["C"])
            .to(peers["G"])
-           .with(_, peer_set{"G"}, make_data_message("foo", 42)));
+           .with(_, peer_set{"G"}, make_data_message("foo", 42), 19u));
 }
 
 FIXTURE_SCOPE_END()

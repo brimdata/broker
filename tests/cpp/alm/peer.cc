@@ -1,4 +1,4 @@
-#define SUITE multi_hop_routing
+#define SUITE alm.peer
 
 #include "broker/core_actor.hh"
 
@@ -131,7 +131,7 @@ FIXTURE_SCOPE(multi_hop_routing_tests, fixture)
   CHECK_EQUAL(get(src).distance_to(dst), size_t{val})
 
 TEST(topologies with loops resolve to simple forwarding tables) {
-  using peer_set = std::set<peer_id>;
+  using peer_vec = std::vector<peer_id>;
   MESSAGE("after all links are connected, G subscribes to topic 'foo'");
   anon_send(peers["G"], atom::subscribe::value, topic{"foo"});
   run();
@@ -148,14 +148,14 @@ TEST(topologies with loops resolve to simple forwarding tables) {
   MESSAGE("publishing to foo on A will send through C");
   anon_send(peers["A"], atom::publish::value, make_data_message("foo", 42));
   expect((atom_value, data_message), from(_).to(peers["A"]));
-  expect((atom_value, peer_set, data_message, uint16_t),
+  expect((atom_value, peer_vec, data_message, uint16_t),
          from(peers["A"])
            .to(peers["C"])
-           .with(_, peer_set{"G"}, make_data_message("foo", 42), 20u));
-  expect((atom_value, peer_set, data_message, uint16_t),
+           .with(_, peer_vec{"G"}, make_data_message("foo", 42), 20u));
+  expect((atom_value, peer_vec, data_message, uint16_t),
          from(peers["C"])
            .to(peers["G"])
-           .with(_, peer_set{"G"}, make_data_message("foo", 42), 19u));
+           .with(_, peer_vec{"G"}, make_data_message("foo", 42), 19u));
 }
 
 FIXTURE_SCOPE_END()

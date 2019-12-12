@@ -1,13 +1,23 @@
 #pragma once
 
 #include <map>
-#include <set>
+#include <vector>
 
 #include "broker/alm/routing_table.hh"
 
 namespace broker::alm {
 
-/// Represents a Broker peer in the network.
+/// CRTP base class for represents a Broker peer in the network. The `Derived`
+/// class must provide the following interface:
+///
+/// ~~~
+/// class Derived {
+///   template <class... Ts>
+///   void send(const CommunicationHandle& receiver, Ts&&... xs);
+///
+///   const PeerId& id() const noexcept;
+/// };
+/// ~~~
 template <class Derived, class PeerId, class CommunicationHandle>
 class peer {
 public:
@@ -19,7 +29,8 @@ public:
 
   void subscribe(topic what) {
     BROKER_TRACE(BROKER_ARG(what));
-    if (!subscriptions_.emplace(std::move(what)).second) {
+    // The new topic
+    if (!filter_extend(subscriptions_, what)) {
       BROKER_DEBUG("already subscribed to topic");
       return;
     }
@@ -55,7 +66,8 @@ public:
   }
 
   void handle_subscription(std::vector<peer_id_type>& path,
-                           const std::set<topic>& topics, uint64_t timestamp) {
+                           const std::vector<topic>& topics,
+                           uint64_t timestamp) {
     BROKER_TRACE(BROKER_ARG(path)
                  << BROKER_ARG(topics) << BROKER_ARG(timestamp));
     // Drop nonsense messages.
@@ -99,17 +111,21 @@ public:
     auto& ts = peer_timestamps_[subscriber];
     if (ts < timestamp) {
       // TODO: we can do this more efficient.
-      for (auto& kvp : peer_subscriptions_)
-        kvp.second.erase(subscriber);
-      for (auto&x:topics)
-        peer_subscriptions_[x].emplace(subscriber);
+      for (auto& kvp : peer_subscriptions_) {
+        auto& vec = kvp.second;
+        vec.erase(std::remove(vec.begin(), vec.end(), subscriber), vec.end());
+      }
+      for (auto& x : topics)
+        peer_subscriptions_[x].emplace_back(subscriber);
       ts = timestamp;
     }
   }
 
-  void handle_publication(std::set<peer_id_type>& receivers, data_message msg,
-                          uint16_t ttl) {
-    if (receivers.erase(dref().id()) > 0) {
+  void handle_publication(std::vector<peer_id_type>& receivers,
+                          data_message msg, uint16_t ttl) {
+    auto i = std::remove(receivers.begin(), receivers.end(), dref().id());
+    if (i != receivers.end()) {
+      receivers.erase(i, receivers.end());
       // TODO: ship to local subscribers
     }
     if (!receivers.empty()) {
@@ -122,11 +138,11 @@ public:
   }
 
   void publish(data_message msg) {
-    std::set<peer_id_type> receivers;
+    std::vector<peer_id_type> receivers;
     auto& topic = get_topic(msg);
     for (auto& kvp : peer_subscriptions_)
       if (kvp.first.prefix_of(topic))
-        receivers.insert(kvp.second.begin(), kvp.second.end());
+        receivers.insert(receivers.end(), kvp.second.begin(), kvp.second.end());
     if (receivers.empty()) {
       BROKER_DEBUG("no subscribers found for topic");
       puts("no subscribers found for topic");
@@ -149,18 +165,18 @@ public:
 
 private:
   /// Forwards `msg` to all `receivers`.
-  void ship(const std::set<peer_id_type>& receivers, data_message& msg,
+  void ship(const std::vector<peer_id_type>& receivers, data_message& msg,
             uint16_t ttl) {
     // Use one bucket for each direct connection. Then put all receivers into
     // the bucket with the shortest path to that receiver. On a tie, we pick
     // the alphabetically first bucket.
     using handle_type = communication_handle_type;
-    using value_type=std::pair<handle_type, std::set<peer_id_type>>;
+    using value_type=std::pair<handle_type, std::vector<peer_id_type>>;
     std::map<peer_id_type, value_type> buckets;
     for (auto& kvp : tbl_)
       buckets.emplace(kvp.first,
-                      std::pair(kvp.second.hdl, std::set<peer_id_type>{}));
-    auto get_bucket = [&](const peer_id_type& x) -> std::set<peer_id_type>* {
+                      std::pair(kvp.second.hdl, std::vector<peer_id_type>{}));
+    auto get_bucket = [&](const peer_id_type& x) -> std::vector<peer_id_type>* {
       // Check for direct connection.
       auto i = buckets.find(x);
       if (i != buckets.end())
@@ -186,7 +202,7 @@ private:
     };
     for (auto& receiver : receivers) {
       if (auto bucket_ptr = get_bucket(receiver))
-        bucket_ptr->emplace(receiver);
+        bucket_ptr->emplace_back(receiver);
     }
     for (auto& [first_hop, entry] : buckets) {
       auto& [hdl, bucket] = entry;
@@ -211,10 +227,10 @@ private:
   std::unordered_map<peer_id_type, uint64_t> peer_timestamps_;
 
   /// Stores subscriptions from local subscribers.
-  std::set<topic> subscriptions_;
+  std::vector<topic> subscriptions_;
 
   /// Stores all subscriptions from other peers.
-  std::map<topic, std::set<peer_id_type>> peer_subscriptions_;
+  std::map<topic, std::vector<peer_id_type>> peer_subscriptions_;
 };
 
 } // namespace broker::alm

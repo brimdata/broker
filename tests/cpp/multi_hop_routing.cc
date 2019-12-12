@@ -6,48 +6,16 @@
 
 #include <caf/test/io_dsl.hpp>
 
+#include "broker/alm/routing_table.hh"
 #include "broker/configuration.hh"
 #include "broker/endpoint.hh"
 #include "broker/logger.hh"
 
-using namespace caf;
 using namespace broker;
-using namespace broker::detail;
 
 namespace {
 
 using peer_id = std::string;
-
-/// Stores direct connections to peers as well as distances to all other peers
-/// that we can reach indirectly.
-template <class PeerId, class CommunicationHandle>
-class routing_table_row {
-public:
-  using peer_id_type = PeerId;
-
-  using communication_handle_type = CommunicationHandle;
-
-  /// Stores an implementation-specific handle for talking to the peer.
-  CommunicationHandle hdl;
-
-  /// Associates peer IDs with distance (in hops) on this path.
-  std::map<PeerId, size_t> distances;
-
-  explicit routing_table_row(CommunicationHandle hdl) : hdl(std::move(hdl)) {
-    // nop
-  }
-};
-
-/// Stores direct connections to peers as well as distances to all other peers
-/// that we can reach indirectly.
-template <class PeerId, class CommunicationHandle>
-using routing_table
-  = std::map<PeerId, routing_table_row<PeerId, CommunicationHandle>>;
-
-template <class Inspector, class PeerId, class CommunicationHandle>
-auto inspect(Inspector& f, routing_table_row<PeerId, CommunicationHandle>& x) {
-  return f(caf::meta::type_name("row"), x.hdl, x.distances);
-}
 
 bool contains(const std::vector<peer_id>& ids, const peer_id& id) {
   auto predicate = [&](const peer_id& pid) { return pid == id; };
@@ -58,7 +26,7 @@ bool contains(const std::vector<peer_id>& ids, const peer_id& id) {
 template <class Derived, class PeerId, class CommunicationHandle>
 class peer {
 public:
-  using routing_table_type = routing_table<PeerId, CommunicationHandle>;
+  using routing_table_type = alm::routing_table<PeerId, CommunicationHandle>;
 
   using peer_id_type = PeerId;
 
@@ -166,7 +134,6 @@ public:
   void publish(data_message msg) {
     std::set<peer_id> receivers;
     auto& topic = get_topic(msg);
-    std::cout << "subs: " << deep_to_string(peer_subscriptions_) << '\n';
     for (auto& kvp : peer_subscriptions_)
       if (kvp.first.prefix_of(topic))
         receivers.insert(kvp.second.begin(), kvp.second.end());
@@ -261,7 +228,7 @@ private:
 
 class peer_actor_state : public peer<peer_actor_state, peer_id, caf::actor> {
 public:
-  peer_actor_state(event_based_actor* self) : self_(self) {
+  peer_actor_state(caf::event_based_actor* self) : self_(self) {
     // nop
   }
 
@@ -279,7 +246,7 @@ public:
   }
 
 private:
-  event_based_actor* self_;
+  caf::event_based_actor* self_;
   peer_id id_;
 };
 
@@ -359,7 +326,7 @@ struct fixture : test_coordinator_fixture<> {
 
   ~fixture() {
     for (auto& kvp : peers)
-      anon_send_exit(kvp.second, exit_reason::user_shutdown);
+      anon_send_exit(kvp.second, caf::exit_reason::user_shutdown);
   }
 
   auto& get(const peer_id& id) {

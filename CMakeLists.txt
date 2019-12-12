@@ -379,6 +379,7 @@ set(BROKER_SRC
   src/detail/sqlite_backend.cc
   src/endpoint.cc
   src/error.cc
+  src/filter_type.cc
   src/internal_command.cc
   src/mailbox.cc
   src/network_info.cc

@@ -1,4 +1,4 @@
-#define SUITE alm.peer
+#define SUITE multi_hop_routing
 
 #include "broker/core_actor.hh"
 

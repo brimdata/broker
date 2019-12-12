@@ -93,6 +93,13 @@ public:
     }
     // Update distance of indirect paths.
     size_t distance = path.size();
+    if (distance > std::numeric_limits<uint16_t>::max()) {
+      BROKER_WARNING("detected path with distance > 65535: drop");
+      return;
+    }
+    // TODO: consider re-calculating the TTL from all distances, because
+    //       currently the TTL only grows and represents the peak distance.
+    ttl_ = std::max(ttl_, static_cast<uint16_t>(distance));
     if (distance > 1) {
       auto& ipaths = src_entry.distances;
       auto i = ipaths.find(path[0]);
@@ -148,7 +155,8 @@ public:
       puts("no subscribers found for topic");
       return;
     }
-    ship(receivers, msg, initial_ttl_);
+    BROKER_ASSERT(ttl_ > 0);
+    ship(receivers, msg, ttl_);
   }
 
   const auto& tbl() const noexcept {
@@ -218,8 +226,8 @@ private:
   /// Stores routing information for reaching other peers.
   routing_table_type tbl_;
 
-  /// Initial TTL count.
-  uint16_t initial_ttl_ = 20;
+  /// Stores the maximum distance to any node.
+  uint16_t ttl_ = 0;
 
   /// A logical timestamp.
   uint64_t timestamp_ = 0;

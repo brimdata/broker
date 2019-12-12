@@ -151,11 +151,11 @@ TEST(topologies with loops resolve to simple forwarding tables) {
   expect((atom_value, peer_vec, data_message, uint16_t),
          from(peers["A"])
            .to(peers["C"])
-           .with(_, peer_vec{"G"}, make_data_message("foo", 42), 20u));
+           .with(_, peer_vec{"G"}, make_data_message("foo", 42), _));
   expect((atom_value, peer_vec, data_message, uint16_t),
          from(peers["C"])
            .to(peers["G"])
-           .with(_, peer_vec{"G"}, make_data_message("foo", 42), 19u));
+           .with(_, peer_vec{"G"}, make_data_message("foo", 42), _));
 }
 
 FIXTURE_SCOPE_END()

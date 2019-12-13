@@ -222,6 +222,7 @@ private:
     for (auto& [first_hop, entry] : buckets) {
       auto& [hdl, bucket] = entry;
       if (!bucket.empty()) {
+        // TODO: we always make one copy more than necessary here.
         auto msg_cpy = msg;
         get_unshared_receivers(msg_cpy) = std::move(bucket);
         dref().send(hdl, atom::publish::value, std::move(msg_cpy));

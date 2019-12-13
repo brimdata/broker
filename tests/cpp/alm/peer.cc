@@ -21,6 +21,15 @@ namespace {
 
 using peer_id = std::string;
 
+using message_type = generic_node_message<peer_id>;
+
+template <class Topic, class Data>
+node_message make_message(Topic&& t, Data&& d, uint16_t ttl,
+                          typename message_type::receiver_list receivers = {}) {
+  return {make_data_message(std::forward<Topic>(t), std::forward<Data>(d)), ttl,
+          std::move(receivers)};
+}
+
 class peer_actor_state : public peer<peer_actor_state, peer_id, caf::actor> {
 public:
   peer_actor_state(caf::event_based_actor* self) : self_(self) {
@@ -36,7 +45,7 @@ public:
     return id_;
   }
 
-  void id(peer_id new_id) noexcept{
+  void id(peer_id new_id) noexcept {
     id_ = std::move(new_id);
   }
 
@@ -90,20 +99,15 @@ caf::behavior peer_actor(peer_actor_type* self, peer_id id) {
 struct fixture : test_coordinator_fixture<> {
   using peer_ids = std::vector<peer_id>;
 
-  fixture(){
+  fixture() {
     for (auto& id : peer_ids{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"})
       peers[id] = sys.spawn(peer_actor, id);
     std::map<peer_id, peer_ids> connections{
-      {"A", {"B", "C", "J"}},
-      {"B", {"A", "D", "E"}},
-      {"C", {"A", "F", "G", "H"}},
-      {"D", {"B", "I"}},
-      {"E", {"B", "I"}},
-      {"F", {"C", "G"}},
-      {"I", {"D", "E", "J"}},
-      {"G", {"C", "F", "H", "J"}},
-      {"H", {"C", "G", "J"}},
-      {"J", {"A", "I", "G","H"}},
+      {"A", {"B", "C", "J"}},      {"B", {"A", "D", "E"}},
+      {"C", {"A", "F", "G", "H"}}, {"D", {"B", "I"}},
+      {"E", {"B", "I"}},           {"F", {"C", "G"}},
+      {"I", {"D", "E", "J"}},      {"G", {"C", "F", "H", "J"}},
+      {"H", {"C", "G", "J"}},      {"J", {"A", "I", "G", "H"}},
     };
     for (auto& [id, links] : connections)
       for (auto& link : links)
@@ -122,6 +126,27 @@ struct fixture : test_coordinator_fixture<> {
 
   std::map<peer_id, caf::actor> peers;
 };
+
+struct message_pattern {
+  topic t;
+  data d;
+  std::vector<peer_id> ps;
+};
+
+bool operator==(const message_pattern& x, const message_type& y) {
+  if (!caf::holds_alternative<data_message>(y.content))
+    return false;
+  const auto& dm = get<data_message>(y.content);
+  if (x.t != get<0>(dm))
+    return false;
+  if (x.d != get<1>(dm))
+    return false;
+  return x.ps == y.receivers;
+}
+
+bool operator==(const message_type& x, const message_pattern& y) {
+  return y == x;
+}
 
 } // namespace
 
@@ -148,14 +173,14 @@ TEST(topologies with loops resolve to simple forwarding tables) {
   MESSAGE("publishing to foo on A will send through C");
   anon_send(peers["A"], atom::publish::value, make_data_message("foo", 42));
   expect((atom_value, data_message), from(_).to(peers["A"]));
-  expect((atom_value, peer_vec, data_message, uint16_t),
+  expect((atom_value, message_type),
          from(peers["A"])
            .to(peers["C"])
-           .with(_, peer_vec{"G"}, make_data_message("foo", 42), _));
-  expect((atom_value, peer_vec, data_message, uint16_t),
+           .with(_, message_pattern{"foo", 42, peer_vec{"G"}}));
+  expect((atom_value, message_type),
          from(peers["C"])
            .to(peers["G"])
-           .with(_, peer_vec{"G"}, make_data_message("foo", 42), _));
+           .with(_, message_pattern{"foo", 42, peer_vec{"G"}}));
 }
 
 FIXTURE_SCOPE_END()

@@ -27,6 +27,8 @@ public:
 
   using communication_handle_type = CommunicationHandle;
 
+  using message_type = generic_node_message<peer_id_type>;
+
   void subscribe(topic what) {
     BROKER_TRACE(BROKER_ARG(what));
     // The new topic
@@ -128,35 +130,37 @@ public:
     }
   }
 
-  void handle_publication(std::vector<peer_id_type>& receivers,
-                          data_message msg, uint16_t ttl) {
-    auto i = std::remove(receivers.begin(), receivers.end(), dref().id());
-    if (i != receivers.end()) {
-      receivers.erase(i, receivers.end());
+  void handle_publication(message_type& msg) {
+    auto i = std::remove(msg.receivers.begin(), msg.receivers.end(),
+                         dref().id());
+    if (i != msg.receivers.end()) {
+      msg.receivers.erase(i, msg.receivers.end());
       // TODO: ship to local subscribers
     }
-    if (!receivers.empty()) {
-      if (--ttl == 0) {
-        BROKER_WARNING("drop published message: TTL expired");
+    if (!msg.receivers.empty()) {
+      if (--msg.ttl == 0) {
+        BROKER_WARNING("drop message: TTL expired");
         return;
       }
-      ship(receivers, msg, ttl);
+      ship(msg);
     }
   }
 
-  void publish(data_message msg) {
-    std::vector<peer_id_type> receivers;
-    auto& topic = get_topic(msg);
+  void publish(data_message& content) {
+    auto& topic = get_topic(content);
+    message_type msg{std::move(content), ttl_,
+                     typename message_type::receiver_list{}};
     for (auto& kvp : peer_subscriptions_)
       if (kvp.first.prefix_of(topic))
-        receivers.insert(receivers.end(), kvp.second.begin(), kvp.second.end());
-    if (receivers.empty()) {
+        msg.receivers.insert(msg.receivers.end(), kvp.second.begin(),
+                             kvp.second.end());
+    if (msg.receivers.empty()) {
       BROKER_DEBUG("no subscribers found for topic");
       puts("no subscribers found for topic");
       return;
     }
     BROKER_ASSERT(ttl_ > 0);
-    ship(receivers, msg, ttl_);
+    ship(msg);
   }
 
   const auto& tbl() const noexcept {
@@ -171,10 +175,13 @@ public:
     return peer_subscriptions_;
   }
 
+  auto ttl() const noexcept {
+    return ttl_;
+  }
+
 private:
   /// Forwards `msg` to all `receivers`.
-  void ship(const std::vector<peer_id_type>& receivers, data_message& msg,
-            uint16_t ttl) {
+  void ship(message_type& msg) {
     // Use one bucket for each direct connection. Then put all receivers into
     // the bucket with the shortest path to that receiver. On a tie, we pick
     // the alphabetically first bucket.
@@ -208,14 +215,17 @@ private:
       }
       return &buckets[bucket_name].second;
     };
-    for (auto& receiver : receivers) {
+    for (auto& receiver : msg.receivers) {
       if (auto bucket_ptr = get_bucket(receiver))
         bucket_ptr->emplace_back(receiver);
     }
     for (auto& [first_hop, entry] : buckets) {
       auto& [hdl, bucket] = entry;
-      if (!bucket.empty())
-        dref().send(hdl, atom::publish::value, std::move(bucket), msg, ttl);
+      if (!bucket.empty()) {
+        auto msg_cpy = msg;
+        msg_cpy.receivers = std::move(bucket);
+        dref().send(hdl, atom::publish::value, std::move(msg_cpy));
+      }
     }
   }
 

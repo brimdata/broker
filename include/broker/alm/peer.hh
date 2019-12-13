@@ -131,14 +131,15 @@ public:
   }
 
   void handle_publication(message_type& msg) {
-    auto i = std::remove(msg.receivers.begin(), msg.receivers.end(),
-                         dref().id());
-    if (i != msg.receivers.end()) {
-      msg.receivers.erase(i, msg.receivers.end());
+    auto ttl = --get_unshared_ttl(msg);
+    auto& receivers = get_unshared_receivers(msg);
+    auto i = std::remove(receivers.begin(), receivers.end(), dref().id());
+    if (i != receivers.end()) {
+      receivers.erase(i, receivers.end());
       // TODO: ship to local subscribers
     }
-    if (!msg.receivers.empty()) {
-      if (--msg.ttl == 0) {
+    if (!receivers.empty()) {
+      if (ttl == 0) {
         BROKER_WARNING("drop message: TTL expired");
         return;
       }
@@ -148,17 +149,16 @@ public:
 
   void publish(data_message& content) {
     auto& topic = get_topic(content);
-    message_type msg{std::move(content), ttl_,
-                     typename message_type::receiver_list{}};
+    std::vector<peer_id_type> receivers;
     for (auto& kvp : peer_subscriptions_)
       if (kvp.first.prefix_of(topic))
-        msg.receivers.insert(msg.receivers.end(), kvp.second.begin(),
-                             kvp.second.end());
-    if (msg.receivers.empty()) {
+        receivers.insert(receivers.end(), kvp.second.begin(), kvp.second.end());
+    if (receivers.empty()) {
       BROKER_DEBUG("no subscribers found for topic");
       puts("no subscribers found for topic");
       return;
     }
+    message_type msg{std::move(content), ttl_, std::move(receivers)};
     BROKER_ASSERT(ttl_ > 0);
     ship(msg);
   }
@@ -215,7 +215,7 @@ private:
       }
       return &buckets[bucket_name].second;
     };
-    for (auto& receiver : msg.receivers) {
+    for (auto& receiver : get_receivers(msg)) {
       if (auto bucket_ptr = get_bucket(receiver))
         bucket_ptr->emplace_back(receiver);
     }
@@ -223,7 +223,7 @@ private:
       auto& [hdl, bucket] = entry;
       if (!bucket.empty()) {
         auto msg_cpy = msg;
-        msg_cpy.receivers = std::move(bucket);
+        get_unshared_receivers(msg_cpy) = std::move(bucket);
         dref().send(hdl, atom::publish::value, std::move(msg_cpy));
       }
     }

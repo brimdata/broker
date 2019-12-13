@@ -119,7 +119,7 @@ void configuration::add_message_types(caf::actor_system_config& cfg) {
   ADD_MSG_TYPE(broker::command_message);
   ADD_MSG_TYPE(broker::data_message);
   ADD_MSG_TYPE(broker::node_message);
-  ADD_MSG_TYPE(broker::node_message::value_type);
+  ADD_MSG_TYPE(broker::node_message_content);
   ADD_MSG_TYPE(broker::set_command);
   ADD_MSG_TYPE(broker::store::stream_type::value_type);
 }

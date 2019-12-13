@@ -418,7 +418,7 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
       auto& st = self->state;
       st.governor->add_unchecked_inbound_path(in);
     },
-    [=](stream<node_message::value_type> in) {
+    [=](stream<node_message_content> in) {
       BROKER_TRACE("add node_message::value_type input stream");
       auto& st = self->state;
       st.governor->add_unchecked_inbound_path(in);

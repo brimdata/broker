@@ -323,7 +323,7 @@ private:
   }
 
   bool try_record(const node_message& x) {
-    return try_record(x.content);
+    return try_record(get_content(x));
   }
 
   template <class T>

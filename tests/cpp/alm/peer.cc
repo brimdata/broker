@@ -25,7 +25,7 @@ using message_type = generic_node_message<peer_id>;
 
 template <class Topic, class Data>
 node_message make_message(Topic&& t, Data&& d, uint16_t ttl,
-                          typename message_type::receiver_list receivers = {}) {
+                          std::vector<peer_id> receivers = {}) {
   return {make_data_message(std::forward<Topic>(t), std::forward<Data>(d)), ttl,
           std::move(receivers)};
 }
@@ -134,14 +134,14 @@ struct message_pattern {
 };
 
 bool operator==(const message_pattern& x, const message_type& y) {
-  if (!caf::holds_alternative<data_message>(y.content))
+  if (!is_data_message(y))
     return false;
-  const auto& dm = get<data_message>(y.content);
-  if (x.t != get<0>(dm))
+  const auto& dm = get_data_message(y);
+  if (x.t != get_topic(dm))
     return false;
-  if (x.d != get<1>(dm))
+  if (x.d != get_data(dm))
     return false;
-  return x.ps == y.receivers;
+  return x.ps == get_receivers(y);
 }
 
 bool operator==(const message_type& x, const message_pattern& y) {

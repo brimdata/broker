@@ -122,12 +122,12 @@ void core_policy::handle_batch(stream_slot, const strong_actor_ptr& peer,
       const topic* t;
       // Dispatch to local workers or stores messages.
       if (is_data_message(msg)) {
-        auto& dm = get<data_message>(msg.content);
+        auto& dm = get_data_message(msg);
         t = &get_topic(dm);
         if (num_workers > 0)
           workers().push(dm);
       } else {
-        auto& cm = get<command_message>(msg.content);
+        auto& cm = get_command_message(msg);
         t = &get_topic(cm);
         if (num_stores > 0)
           stores().push(cm);
@@ -139,7 +139,7 @@ void core_policy::handle_batch(stream_slot, const strong_actor_ptr& peer,
       if (ends_with(t->string(), topics::clone_suffix.string()))
         continue;
       // Either decrease TTL if message has one already, or add one.
-      if (--msg.ttl == 0) {
+      if (--get_unshared_ttl(msg) == 0) {
         BROKER_WARNING("dropped a message with expired TTL");
         continue;
       }
@@ -148,7 +148,7 @@ void core_policy::handle_batch(stream_slot, const strong_actor_ptr& peer,
     }
     return;
   }
-  using variant_batch = std::vector<node_message::value_type>;
+  using variant_batch = std::vector<node_message_content>;
   if (try_handle<worker_trait::batch>(xs, "publish from local workers")
       || try_handle<store_trait::batch>(xs, "publish from local stores")
       || try_handle<variant_batch>(xs, "publish from custom actors"))

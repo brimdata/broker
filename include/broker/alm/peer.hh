@@ -136,7 +136,7 @@ public:
     auto i = std::remove(receivers.begin(), receivers.end(), dref().id());
     if (i != receivers.end()) {
       receivers.erase(i, receivers.end());
-      // TODO: ship to local subscribers
+      dref().ship_locally(msg);
     }
     if (!receivers.empty()) {
       if (ttl == 0) {

@@ -50,6 +50,10 @@ public:
     return self_;
   }
 
+  void ship_locally(message_type&) {
+    // nop
+  }
+
 private:
   caf::event_based_actor* self_;
   peer_id id_;

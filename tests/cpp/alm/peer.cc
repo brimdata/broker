@@ -6,12 +6,14 @@
 
 #include <caf/test/io_dsl.hpp>
 
+#include "broker/alm/async_transport.hh"
 #include "broker/alm/peer.hh"
 #include "broker/configuration.hh"
 #include "broker/detail/lift.hh"
 #include "broker/endpoint.hh"
 #include "broker/logger.hh"
 
+using broker::alm::async_transport;
 using broker::alm::peer;
 using broker::detail::lift;
 
@@ -30,15 +32,10 @@ node_message make_message(Topic&& t, Data&& d, uint16_t ttl,
           std::move(receivers)};
 }
 
-class peer_actor_state : public peer<peer_actor_state, peer_id, caf::actor> {
+class peer_actor_state : public async_transport<peer_actor_state, peer_id> {
 public:
   peer_actor_state(caf::event_based_actor* self) : self_(self) {
     // nop
-  }
-
-  template <class... Ts>
-  void send(const caf::actor& receiver, Ts&&... xs) {
-    self_->send(receiver, std::forward<Ts>(xs)...);
   }
 
   const auto& id() const noexcept {
@@ -47,6 +44,10 @@ public:
 
   void id(peer_id new_id) noexcept {
     id_ = std::move(new_id);
+  }
+
+  auto self() {
+    return self_;
   }
 
 private:
@@ -59,13 +60,8 @@ using peer_actor_type = caf::stateful_actor<peer_actor_state>;
 caf::behavior peer_actor(peer_actor_type* self, peer_id id) {
   using state_type = peer_actor_state;
   self->state.id(std::move(id));
-  return {
-    lift<broker::none>(self->state, &state_type::add_connection),
-    lift<atom::publish>(self->state, &state_type::publish),
-    lift<atom::subscribe>(self->state, &state_type::subscribe),
-    lift<atom::publish>(self->state, &state_type::handle_publication),
-    lift<atom::subscribe>(self->state, &state_type::handle_subscription),
-  };
+  auto& st = self->state;
+  return self->state.make_behavior();
 }
 
 // In this fixture, we're setting up this messy topology full of loops:
@@ -111,7 +107,7 @@ struct fixture : test_coordinator_fixture<> {
     };
     for (auto& [id, links] : connections)
       for (auto& link : links)
-        anon_send(peers[id], link, peers[link]);
+        anon_send(peers[id], atom::peer::value, link, peers[link]);
     run();
   }
 

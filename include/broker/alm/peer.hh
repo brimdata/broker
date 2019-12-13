@@ -3,7 +3,12 @@
 #include <map>
 #include <vector>
 
+#include <caf/behavior.hpp>
+
 #include "broker/alm/routing_table.hh"
+#include "broker/atoms.hh"
+#include "broker/logger.hh"
+#include "broker/message.hh"
 
 namespace broker::alm {
 
@@ -62,11 +67,6 @@ public:
     return nil;
   }
 
-  bool add_connection(peer_id_type remote_peer, communication_handle_type hdl) {
-    BROKER_TRACE(BROKER_ARG(remote_peer) << BROKER_ARG(hdl));
-    return tbl_.emplace(std::move(remote_peer), std::move(hdl)).second;
-  }
-
   void handle_subscription(std::vector<peer_id_type>& path,
                            const std::vector<topic>& topics,
                            uint64_t timestamp) {
@@ -79,7 +79,7 @@ public:
     }
     auto src_iter = tbl_.find(path.back());
     if (src_iter == tbl_.end()) {
-      BROKER_WARNING("received join from an unrecognized connection");
+      BROKER_WARNING("received subscription from an unrecognized connection");
       return;
     }
     auto& src_entry = src_iter->second;
@@ -163,6 +163,10 @@ public:
     ship(msg);
   }
 
+  auto& tbl() noexcept {
+    return tbl_;
+  }
+
   const auto& tbl() const noexcept {
     return tbl_;
   }
@@ -177,6 +181,10 @@ public:
 
   auto ttl() const noexcept {
     return ttl_;
+  }
+
+  auto timestamp() const noexcept {
+    return timestamp_;
   }
 
 private:

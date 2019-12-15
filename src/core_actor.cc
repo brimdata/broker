@@ -58,8 +58,7 @@ result<void> init_peering(caf::stateful_actor<core_state>* self,
     rp.deliver(caf::unit);
     return rp;
   }
-  if (st.peers_file)
-    st.peers_file << to_string(remote_core.node()) << std::endl;
+  st.policy().recorder().record_peer(remote_core.node());
   // Create necessary state and send message to remote core.
   st.pending_peers.emplace(remote_core,
                            core_state::pending_peer_state{0, rp});
@@ -116,55 +115,10 @@ void core_state::init(filter_type initial_filter, broker_options opts,
                       endpoint::clock* ep_clock) {
   options = std::move(opts);
   cache.set_use_ssl(! options.disable_ssl);
-  governor = caf::make_counted<governor_type>(self, this, initial_filter);
+  governor = caf::make_counted<governor_type>(self, this);
   policy().subscribe(initial_filter);
   clock = ep_clock;
-  auto meta_dir = get_or(self->config(), "broker.recording-directory",
-                         defaults::recording_directory);
-  if (!meta_dir.empty() && detail::is_directory(meta_dir)) {
-    auto file_name = meta_dir + "/topics.txt";
-    topics_file.open(file_name);
-    if (topics_file.is_open()) {
-      BROKER_DEBUG("opened file for recording:" << file_name);
-      for (const auto& x : initial_filter) {
-        if (!(topics_file << x.string() << '\n')) {
-          BROKER_WARNING("failed to write to topics file");
-          topics_file.close();
-          break;
-        }
-      }
-      topics_file.flush();
-    } else {
-      BROKER_WARNING("cannot open recording file" << file_name);
-    }
-    peers_file.open(meta_dir + "/peers.txt");
-    if (!peers_file.is_open())
-      BROKER_WARNING("cannot open recording file" << file_name);
-    std::ofstream id_file{meta_dir + "/id.txt"};
-    id_file << to_string(self->node()) << '\n';
-  }
 }
-
-/*
-void core_state::add_to_filter(filter_type xs) {
-  BROKER_TRACE(BROKER_ARG(xs));
-  // Simply append to topics without de-duplication.
-  if (topics_file.is_open()) {
-    for (const auto& x : xs) {
-      if (!(topics_file << x.string() << '\n')) {
-        BROKER_WARNING("failed to write to topics file");
-        topics_file.close();
-        break;
-      }
-    }
-    topics_file.flush();
-  }
-  if (filter_extend(filter, xs)) {
-    BROKER_DEBUG("Changed filter to " << filter);
-    update_filter_on_peers();
-  }
-}
-*/
 
 bool core_state::has_peer(const caf::actor& x) {
   return pending_peers.count(x) > 0 || policy().has_peer(x);

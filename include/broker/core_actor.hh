@@ -54,14 +54,6 @@ struct core_state {
   void init(filter_type initial_filter, broker_options opts,
             endpoint::clock* ep_clock);
 
-  // --- filter management -----------------------------------------------------
-
-  /// Sends the current filter to all peers.
-  void update_filter_on_peers();
-
-  /// Adds `xs` to our filter and update all peers on changes.
-  void add_to_filter(filter_type xs);
-
   // --- convenience functions for querying state ------------------------------
 
   /// Returns whether `x` is either a pending peer or a connected peer.
@@ -147,9 +139,6 @@ struct core_state {
 
   /// Stores all clone actors created by this core.
   std::unordered_multimap<std::string, caf::actor> clones;
-
-  /// Requested topics on this core.
-  filter_type filter;
 
   /// Multiplexes local streams and streams for peers.
   governor_ptr governor;

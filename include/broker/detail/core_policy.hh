@@ -120,6 +120,11 @@ public:
 
   void push_to_substreams(std::vector<caf::message> vec);
 
+  // -- topic management -------------------------------------------------------
+
+  /// Adds `what` to our filter and updates all peers on changes.
+  void subscribe(const filter_type& what);
+
   // -- status updates to the state --------------------------------------------
 
   void peer_lost(const caf::actor& hdl);
@@ -264,10 +269,10 @@ public:
   const store_trait::manager& stores() const noexcept;
 
   /// Returns a pointer to the owning actor.
-  caf::scheduled_actor* self();
+  caf::event_based_actor* self();
 
   /// Returns a pointer to the owning actor.
-  const caf::scheduled_actor* self() const;
+  const caf::event_based_actor* self() const;
 
   /// Applies `f` to each peer.
   template <class F>
@@ -295,6 +300,11 @@ public:
     for (auto& kvp : peers().states()) {
       f(kvp.second.filter);
     }
+  }
+
+  /// Returns all subscribed topics.
+  const auto& subscriptions() const noexcept {
+    return subscriptions_;
   }
 
 private:
@@ -382,6 +392,9 @@ private:
 
   /// Pointer to the state.
   core_state* state_;
+
+  /// Subscribed topics on this peer.
+  filter_type subscriptions_;
 
   /// Maps peer handles to output path IDs.
   peer_to_path_map peer_to_opath_;

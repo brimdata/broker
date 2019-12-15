@@ -158,7 +158,7 @@ FIXTURE_SCOPE(multi_hop_routing_tests, fixture)
 TEST(topologies with loops resolve to simple forwarding tables) {
   using peer_vec = std::vector<peer_id>;
   MESSAGE("after all links are connected, G subscribes to topic 'foo'");
-  anon_send(peers["G"], atom::subscribe::value, topic{"foo"});
+  anon_send(peers["G"], atom::subscribe::value, filter_type{topic{"foo"}});
   run();
   MESSAGE("after the subscription, all routing tables store a distance to G");
   CHECK_DISTANCE("A", "G", 2);

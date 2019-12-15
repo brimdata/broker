@@ -63,7 +63,8 @@ result<void> init_peering(caf::stateful_actor<core_state>* self,
   // Create necessary state and send message to remote core.
   st.pending_peers.emplace(remote_core,
                            core_state::pending_peer_state{0, rp});
-  self->send(self * remote_core, atom::peer::value, st.filter, self);
+  self->send(self * remote_core, atom::peer::value, st.policy().subscriptions(),
+             self);
   self->monitor(remote_core);
   return rp;
 }
@@ -114,9 +115,9 @@ core_state::core_state(caf::event_based_actor* ptr)
 void core_state::init(filter_type initial_filter, broker_options opts,
                       endpoint::clock* ep_clock) {
   options = std::move(opts);
-  filter = std::move(initial_filter);
   cache.set_use_ssl(! options.disable_ssl);
-  governor = caf::make_counted<governor_type>(self, this, filter);
+  governor = caf::make_counted<governor_type>(self, this, initial_filter);
+  policy().subscribe(initial_filter);
   clock = ep_clock;
   auto meta_dir = get_or(self->config(), "broker.recording-directory",
                          defaults::recording_directory);
@@ -125,7 +126,7 @@ void core_state::init(filter_type initial_filter, broker_options opts,
     topics_file.open(file_name);
     if (topics_file.is_open()) {
       BROKER_DEBUG("opened file for recording:" << file_name);
-      for (const auto& x : filter) {
+      for (const auto& x : initial_filter) {
         if (!(topics_file << x.string() << '\n')) {
           BROKER_WARNING("failed to write to topics file");
           topics_file.close();
@@ -144,13 +145,7 @@ void core_state::init(filter_type initial_filter, broker_options opts,
   }
 }
 
-void core_state::update_filter_on_peers() {
-  BROKER_TRACE("");
-  policy().for_each_peer([&](const actor& hdl) {
-    self->send(hdl, atom::update::value, filter);
-  });
-}
-
+/*
 void core_state::add_to_filter(filter_type xs) {
   BROKER_TRACE(BROKER_ARG(xs));
   // Simply append to topics without de-duplication.
@@ -169,6 +164,7 @@ void core_state::add_to_filter(filter_type xs) {
     update_filter_on_peers();
   }
 }
+*/
 
 bool core_state::has_peer(const caf::actor& x) {
   return pending_peers.count(x) > 0 || policy().has_peer(x);
@@ -278,9 +274,9 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
   );
   return {
     // --- filter manipulation -------------------------------------------------
-    [=](atom::subscribe, filter_type& f) {
-      BROKER_TRACE(BROKER_ARG(f));
-      self->state.add_to_filter(std::move(f));
+    [=](atom::subscribe, const filter_type& what) {
+      BROKER_TRACE(BROKER_ARG(what));
+      self->state.policy().subscribe(what);
     },
     // --- peering requests from local actors, i.e., "step 0" ------------------
     [=](atom::peer, actor remote_core) -> result<void> {
@@ -373,32 +369,32 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
         BROKER_DEBUG("Cannot update filter of unknown peer:" << to_string(p));
     },
     // --- communication to local actors: incoming streams and subscriptions ---
-    [=](atom::join, filter_type& filter) {
+    [=](atom::join, const filter_type& filter) {
       BROKER_TRACE(BROKER_ARG(filter));
-      auto& st = self->state;
-      auto result = st.governor->policy().add_worker(filter);
+      auto& policy = self->state.policy();
+      auto result = policy.add_worker(filter);
       if (result != invalid_stream_slot)
-        st.add_to_filter(std::move(filter));
+        policy.subscribe(filter);
       return result;
     },
     [=](atom::join, atom::update, stream_slot slot, filter_type& filter) {
-      auto& st = self->state;
-      st.add_to_filter(filter);
-      st.policy().workers().set_filter(slot, std::move(filter));
+      auto& policy = self->state.policy();
+      policy.subscribe(filter);
+      policy.workers().set_filter(slot, std::move(filter));
     },
     [=](atom::join, atom::update, stream_slot slot, filter_type& filter,
         caf::actor& who_asked) {
-      auto& st = self->state;
-      st.add_to_filter(filter);
-      st.policy().workers().set_filter(slot, std::move(filter));
+      auto& policy = self->state.policy();
+      policy.subscribe(filter);
+      policy.workers().set_filter(slot, std::move(filter));
       self->send(who_asked, true);
     },
-    [=](atom::join, atom::store, filter_type& filter) {
+    [=](atom::join, atom::store, const filter_type& filter) {
       // Tap into data store messages.
-      auto& st = self->state;
-      auto result = st.governor->policy().add_store(filter);
+      auto& policy = self->state.policy();
+      auto result = policy.add_store(filter);
       if (result != invalid_stream_slot)
-        st.add_to_filter(std::move(filter));
+        policy.subscribe(filter);
       return result;
     },
     [=](endpoint::stream_type in) {
@@ -487,7 +483,7 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
       }
       // Subscribe to messages directly targeted at the master.
       filter_type filter{name / topics::master_suffix};
-      st.add_to_filter(filter);
+      st.policy().subscribe(filter);
       // Move the slot to the stores downstream manager and set filter.
       st.governor->out().assign<detail::core_policy::store_trait::manager>(slot);
       st.policy().stores().set_filter(slot, std::move(filter));
@@ -530,7 +526,7 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
       }
       // Subscribe to messages directly targeted at the clone.
       filter_type filter{name / topics::clone_suffix};
-      st.add_to_filter(filter);
+      st.policy().subscribe(filter);
       // Move the slot to the stores downstream manager and set filter.
       st.governor->out().assign<detail::core_policy::store_trait::manager>(slot);
       st.policy().stores().set_filter(slot, std::move(filter));

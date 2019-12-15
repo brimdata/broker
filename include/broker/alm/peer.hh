@@ -87,7 +87,7 @@ public:
 
   // -- publish and subscribe functions ----------------------------------------
 
-  void subscribe(topic what) {
+  void subscribe(const filter_type& what) {
     BROKER_TRACE(BROKER_ARG(what));
     // The new topic
     if (!filter_extend(subscriptions_, what)) {

@@ -413,12 +413,12 @@ auto core_policy::stores() const noexcept -> const store_trait::manager& {
   return out().get<store_trait::manager>();
 }
 
-scheduled_actor* core_policy::self() {
-  return parent_->self();
+caf::event_based_actor* core_policy::self() {
+  return state_->self;
 }
 
-const scheduled_actor* core_policy::self() const {
-  return parent_->self();
+const caf::event_based_actor* core_policy::self() const {
+  return state_->self;
 }
 
 std::vector<caf::actor> core_policy::get_peer_handles() {
@@ -434,6 +434,15 @@ std::vector<caf::actor> core_policy::get_peer_handles() {
   if (p != e)
     peers.erase(p, e);
   return peers;
+}
+
+void core_policy::subscribe(const filter_type& what) {
+  BROKER_TRACE(BROKER_ARG(what));
+  if (filter_extend(subscriptions_, what)) {
+    BROKER_DEBUG("Changed filter to " << subscriptions_);
+    for (const auto& hdl : get_peer_handles())
+      self()->send(hdl, atom::update::value, subscriptions_);
+  }
 }
 
 core_policy::ttl core_policy::initial_ttl() const {
@@ -473,7 +482,7 @@ void core_policy::add_opath(stream_slot slot, const actor& peer_hdl) {
 }
 
 auto core_policy::add(std::true_type, const actor& hdl) -> step1_handshake {
-  auto xs = std::make_tuple(state_->filter, actor_cast<actor>(self()));
+  auto xs = std::make_tuple(subscriptions_, actor_cast<actor>(self()));
   return parent_->add_unchecked_outbound_path<node_message>(hdl, std::move(xs));
 }
 

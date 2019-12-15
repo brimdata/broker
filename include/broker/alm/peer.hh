@@ -20,12 +20,16 @@ namespace broker::alm {
 ///   template <class... Ts>
 ///   void send(const CommunicationHandle& receiver, Ts&&... xs);
 ///
+///   void ship_locally(message_type&);
+///
 ///   const PeerId& id() const noexcept;
 /// };
 /// ~~~
 template <class Derived, class PeerId, class CommunicationHandle>
 class peer {
 public:
+  // -- member types -----------------------------------------------------------
+
   using routing_table_type = routing_table<PeerId, CommunicationHandle>;
 
   using peer_id_type = PeerId;
@@ -34,19 +38,33 @@ public:
 
   using message_type = generic_node_message<peer_id_type>;
 
-  void subscribe(topic what) {
-    BROKER_TRACE(BROKER_ARG(what));
-    // The new topic
-    if (!filter_extend(subscriptions_, what)) {
-      BROKER_DEBUG("already subscribed to topic");
-      return;
-    }
-    ++timestamp_;
-    std::vector<peer_id_type> path{dref().id()};
-    for (auto& kvp : tbl_)
-      dref().send(kvp.second.hdl, atom::subscribe::value, path, subscriptions_,
-                  timestamp_);
+  // -- properties -------------------------------------------------------------
+
+  auto& tbl() noexcept {
+    return tbl_;
   }
+
+  const auto& tbl() const noexcept {
+    return tbl_;
+  }
+
+  const auto& subscriptions() const noexcept {
+    return subscriptions_;
+  }
+
+  const auto& peer_subscriptions() const noexcept {
+    return peer_subscriptions_;
+  }
+
+  auto ttl() const noexcept {
+    return ttl_;
+  }
+
+  auto timestamp() const noexcept {
+    return timestamp_;
+  }
+
+  // -- convenience functions for routing information --------------------------
 
   optional<size_t> distance_to(const peer_id_type& remote_peer) {
     // Check for direct connection first.
@@ -66,6 +84,39 @@ public:
       return distance;
     return nil;
   }
+
+  // -- publish and subscribe functions ----------------------------------------
+
+  void subscribe(topic what) {
+    BROKER_TRACE(BROKER_ARG(what));
+    // The new topic
+    if (!filter_extend(subscriptions_, what)) {
+      BROKER_DEBUG("already subscribed to topic");
+      return;
+    }
+    ++timestamp_;
+    std::vector<peer_id_type> path{dref().id()};
+    for (auto& kvp : tbl_)
+      dref().send(kvp.second.hdl, atom::subscribe::value, path, subscriptions_,
+                  timestamp_);
+  }
+
+  void publish(data_message& content) {
+    auto& topic = get_topic(content);
+    std::vector<peer_id_type> receivers;
+    for (auto& kvp : peer_subscriptions_)
+      if (kvp.first.prefix_of(topic))
+        receivers.insert(receivers.end(), kvp.second.begin(), kvp.second.end());
+    if (receivers.empty()) {
+      BROKER_DEBUG("no subscribers found for topic");
+      puts("no subscribers found for topic");
+      return;
+    }
+    message_type msg{std::move(content), ttl_, std::move(receivers)};
+    BROKER_ASSERT(ttl_ > 0);
+    ship(msg);
+  }
+
 
   void handle_subscription(std::vector<peer_id_type>& path,
                            const std::vector<topic>& topics,
@@ -145,46 +196,6 @@ public:
       }
       ship(msg);
     }
-  }
-
-  void publish(data_message& content) {
-    auto& topic = get_topic(content);
-    std::vector<peer_id_type> receivers;
-    for (auto& kvp : peer_subscriptions_)
-      if (kvp.first.prefix_of(topic))
-        receivers.insert(receivers.end(), kvp.second.begin(), kvp.second.end());
-    if (receivers.empty()) {
-      BROKER_DEBUG("no subscribers found for topic");
-      puts("no subscribers found for topic");
-      return;
-    }
-    message_type msg{std::move(content), ttl_, std::move(receivers)};
-    BROKER_ASSERT(ttl_ > 0);
-    ship(msg);
-  }
-
-  auto& tbl() noexcept {
-    return tbl_;
-  }
-
-  const auto& tbl() const noexcept {
-    return tbl_;
-  }
-
-  const auto& subscriptions() const noexcept {
-    return subscriptions_;
-  }
-
-  const auto& peer_subscriptions() const noexcept {
-    return peer_subscriptions_;
-  }
-
-  auto ttl() const noexcept {
-    return ttl_;
-  }
-
-  auto timestamp() const noexcept {
-    return timestamp_;
   }
 
 private:

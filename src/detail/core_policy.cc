@@ -57,39 +57,6 @@ void core_policy::before_handle_batch(stream_slot,
   peers().selector().active_sender = actor_cast<actor_addr>(hdl);
 }
 
-void core_policy::block_peer(caf::actor peer) {
-  blocked_peers.emplace(std::move(peer));
-}
-
-void core_policy::unblock_peer(caf::actor peer) {
-  blocked_peers.erase(peer);
-
-  auto it = blocked_msgs.find(peer);
-
-  if ( it == blocked_msgs.end() )
-    return;
-
-  auto pit = peer_to_ipath_.find(peer);
-
-  if ( pit == peer_to_ipath_.end() ) {
-    blocked_msgs.erase(it);
-    BROKER_DEBUG("dropped batches after unblocking peer: path no longer exists" << peer);
-    return;
-  }
-
-  auto& slot = pit->second;
-  auto sap = actor_cast<strong_actor_ptr>(peer);
-
-  for ( auto& batch : it->second ) {
-    BROKER_DEBUG("handle blocked batch" << peer);
-    before_handle_batch(slot, sap);
-    handle_batch(slot, sap, batch);
-    after_handle_batch(slot, sap);
-  }
-
-  blocked_msgs.erase(it);
-}
-
 static bool ends_with(const std::string& s, const std::string& ending) {
   if (ending.size() > s.size())
     return false;
@@ -101,17 +68,6 @@ void core_policy::handle_batch(stream_slot, const strong_actor_ptr& peer,
   BROKER_TRACE(BROKER_ARG(xs));
 
   if (xs.match_elements<peer_trait::batch>()) {
-
-    auto peer_actor = caf::actor_cast<actor>(peer);
-    auto it = blocked_peers.find(peer_actor);
-
-    if ( it != blocked_peers.end() ) {
-      BROKER_DEBUG("buffer batch from blocked peer" << peer);
-      auto& bmsgs = blocked_msgs[peer_actor];
-      bmsgs.emplace_back(std::move(xs));
-      return;
-    }
-
     auto num_workers = workers().num_paths();
     auto num_stores = stores().num_paths();
     BROKER_DEBUG("forward batch from peers;" << BROKER_ARG(num_workers)

@@ -201,17 +201,9 @@ static void sync_peer_status(core_state* st, caf::actor new_peer) {
     return;
 
   st->peers_awaiting_status_sync.erase(new_peer);
-  st->policy().unblock_peer(std::move(new_peer));
 }
 
 void core_state::sync_with_status_subscribers(caf::actor new_peer) {
-  if ( status_subscribers.empty() ) {
-    // Just in case it was blocked, then status subscribers got removed
-    // before reaching here.
-    policy().unblock_peer(new_peer);
-    return;
-  }
-
   peers_awaiting_status_sync[new_peer] = status_subscribers.size();
 
   for ( auto& ss : status_subscribers ) {
@@ -341,8 +333,6 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
         BROKER_WARNING("Received unexpected or repeated step #2 handshake.");
         return;
       }
-      if ( ! st.status_subscribers.empty() )
-        st.policy().block_peer(peer_hdl);
       st.policy().ack_peering(in, peer_hdl);
       st.policy().start_peering<false>(peer_hdl, std::move(filter));
       // Emit peer added event.
@@ -367,8 +357,6 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
         BROKER_DEBUG("Drop repeated step #3 handshake.");
         return;
       }
-      if ( ! st.status_subscribers.empty() )
-        st.policy().block_peer(peer_hdl);
       st.emit_peer_added_status(peer_hdl, "handshake successful");
       st.policy().ack_peering(in, peer_hdl);
     },

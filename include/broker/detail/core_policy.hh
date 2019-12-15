@@ -151,12 +151,6 @@ public:
   /// Queries whether `hdl` is a known peer.
   bool has_peer(const caf::actor& hdl) const;
 
-  /// Block peer messages from being handled.  They are buffered until unblocked.
-  void block_peer(caf::actor peer);
-
-  /// Unblock peer messages and flush any buffered messages immediately.
-  void unblock_peer(caf::actor peer);
-
   /// Starts the handshake process for a new peering (step #1 in core_actor.cc).
   /// @returns `false` if the peer is already connected, `true` otherwise.
   /// @param peer_hdl Handle to the peering (remote) core actor.
@@ -400,12 +394,6 @@ private:
 
   /// Maps input path IDs to peer handles.
   path_to_peer_map ipath_to_peer_;
-
-  /// Peers that are currently blocked (messages buffered until unblocked).
-  std::unordered_set<caf::actor> blocked_peers;
-
-  /// Messages that are currently buffered.
-  std::unordered_map<caf::actor, std::vector<caf::message>> blocked_msgs;
 
   /// Helper for recording meta data of published messages.
   detail::generator_file_writer_ptr recorder_;

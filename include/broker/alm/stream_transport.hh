@@ -290,30 +290,6 @@ public:
     }
   }
 
-  // void handle(inbound_path* path, downstream_msg::close& x) override {
-  //   BROKER_TRACE(CAF_ARG(path) << CAF_ARG(x));
-  //   // TODO: implement me
-  // }
-
-  // void handle(inbound_path* path, downstream_msg::forced_close& x) override {
-  //   BROKER_TRACE(CAF_ARG(path) << CAF_ARG(x));
-  //   // TODO: implement me
-  // }
-
-  // bool handle(stream_slots slots, upstream_msg::ack_open& x) override {
-  //   BROKER_TRACE(CAF_ARG(slots) << CAF_ARG(x));
-  // }
-
-  // void handle(stream_slots slots, upstream_msg::drop& x) override {
-  //   BROKER_TRACE(CAF_ARG(slots) << CAF_ARG(x));
-  //   // TODO: implement me
-  // }
-
-  // void handle(stream_slots slots, upstream_msg::forced_drop& x) override {
-  //   BROKER_TRACE(CAF_ARG(slots) << CAF_ARG(x));
-  //   // TODO: implement me
-  // }
-
   bool done() const override {
     return !continuous() && pending_handshakes_ == 0
            && inbound_paths_.empty() && out_.clean();

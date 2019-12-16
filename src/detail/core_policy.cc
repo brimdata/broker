@@ -465,16 +465,5 @@ void core_policy::add_opath(stream_slot slot, const actor& peer_hdl) {
   }
 }
 
-auto core_policy::add(std::true_type, const actor& hdl) -> step1_handshake {
-  auto xs = std::make_tuple(subscriptions_, actor_cast<actor>(self()));
-  return parent_->add_unchecked_outbound_path<node_message>(hdl, std::move(xs));
-}
-
-auto core_policy::add(std::false_type, const actor& hdl) -> step2_handshake {
-  atom_value ok = ok_atom::value;
-  auto xs = std::make_tuple(ok, actor_cast<actor>(self()));
-  return parent_->add_unchecked_outbound_path<node_message>(hdl, std::move(xs));
-}
-
 } // namespace detail
 } // namespace broker

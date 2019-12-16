@@ -15,6 +15,7 @@
 #include <caf/message.hpp>
 #include <caf/stream_slot.hpp>
 
+#include "broker/atoms.hh"
 #include "broker/data.hh"
 #include "broker/detail/assert.hh"
 #include "broker/detail/core_recorder.hh"
@@ -163,24 +164,32 @@ public:
   /// @param send_own_filter Sends a `(filter, self)` handshake if `true`,
   ///                        `('ok', self)` otherwise.
   /// @pre `current_sender() != nullptr`
-  template <bool SendOwnFilter>
-  typename std::conditional<
-    SendOwnFilter,
-    step1_handshake,
-    step2_handshake
-  >::type
-  start_peering(const caf::actor& peer_hdl, filter_type peer_filter) {
+  template <size_t Step>
+  auto handle_peering(const caf::actor& peer_hdl, filter_type peer_filter) {
     BROKER_TRACE(BROKER_ARG(peer_hdl) << BROKER_ARG(peer_filter));
-    // Token for static dispatch of add().
-    std::integral_constant<bool, SendOwnFilter> send_own_filter_token;
+    using result_type
+      = std::conditional_t<Step == 1, step1_handshake, step2_handshake>;
     // Check whether we already send outbound traffic to the peer. Could use
     // `CAF_ASSERT` instead, because this must'nt get called for known peers.
     if (peer_to_opath_.count(peer_hdl) != 0) {
       BROKER_ERROR("peer already connected");
-      return {};
+      return result_type{};
     }
     // Add outbound path to the peer.
-    auto slot = add(send_own_filter_token, peer_hdl);
+    auto self_hdl = caf::actor_cast<caf::actor>(self());
+    caf::stream_slot slot;
+    if constexpr (Step == 1) {
+      // In step 1, we send over our actor subscriptions as well as our address.
+      auto xs = std::make_tuple(subscriptions_, self_hdl);
+      slot = parent_->add_unchecked_outbound_path<node_message>(peer_hdl,
+                                                                std::move(xs));
+    } else {
+      // In step 1, we acknowledge the connection by sending 'ok' + address.
+      static_assert(Step == 2);
+      auto xs = std::make_tuple(atom::ok::value, self_hdl);
+      slot = parent_->add_unchecked_outbound_path<node_message>(peer_hdl,
+                                                                std::move(xs));
+    }
     // Make sure the peer receives the correct traffic.
     out().assign<peer_trait::manager>(slot);
     peers().set_filter(slot,
@@ -188,7 +197,7 @@ public:
                                       std::move(peer_filter)));
     // Add bookkeeping state for our new peer.
     add_opath(slot, peer_hdl);
-    return slot;
+    return result_type{slot};
   }
 
   /// Acknowledges an incoming peering request (step #2/3 in core_actor.cc).
@@ -222,8 +231,7 @@ public:
   /// Adds the sender of the current message as store by starting an output
   /// stream to it.
   /// @pre `current_sender() != nullptr`
-  caf::outbound_stream_slot<store_trait::element>
-  add_store(filter_type filter);
+  caf::outbound_stream_slot<store_trait::element> add_store(filter_type filter);
 
   // -- selectively pushing data into the streams ------------------------------
 
@@ -363,12 +371,6 @@ private:
   /// no entry for a peer exists afterwards.
   void remove_cb(caf::stream_slot slot, path_to_peer_map& xs,
                  peer_to_path_map& ys, peer_to_path_map& zs, caf::error reason);
-
-  /// Sends a handshake with filter in step #1.
-  step1_handshake add(std::true_type send_own_filter, const caf::actor& hdl);
-
-  /// Sends a handshake with 'ok' in step #2.
-  step2_handshake add(std::false_type send_own_filter, const caf::actor& hdl);
 
   /// Pointer to the parent.
   caf::detail::stream_distribution_tree<core_policy>* parent_;

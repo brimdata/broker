@@ -269,7 +269,7 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
       BROKER_DEBUG("received handshake step #1" << BROKER_ARG(peer_hdl)
                     << BROKER_ARG(actor{self}));
       // Start CAF stream.
-      return st.policy().start_peering<true>(peer_hdl, std::move(peer_ts));
+      return st.policy().handle_peering<1>(peer_hdl, std::move(peer_ts));
     },
     // Step #2: B establishes a stream to A and sends its own filter
     [=](const stream<node_message>& in, filter_type& filter,
@@ -284,7 +284,7 @@ caf::behavior core_actor(caf::stateful_actor<core_state>* self,
         return;
       }
       st.policy().ack_peering(in, peer_hdl);
-      st.policy().start_peering<false>(peer_hdl, std::move(filter));
+      st.policy().handle_peering<2>(peer_hdl, std::move(filter));
       // Emit peer added event.
       st.emit_peer_added_status(peer_hdl, "received handshake from remote core");
       // Send handle to the actor that initiated a peering (if available).

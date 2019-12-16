@@ -10,7 +10,6 @@
 #include "broker/detail/lift.hh"
 #include "broker/filter_type.hh"
 #include "broker/message.hh"
-#include "broker/optional.hh"
 
 namespace broker::alm {
 

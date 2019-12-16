@@ -7,6 +7,7 @@
 
 #include "broker/alm/routing_table.hh"
 #include "broker/atoms.hh"
+#include "broker/filter_type.hh"
 #include "broker/logger.hh"
 #include "broker/message.hh"
 

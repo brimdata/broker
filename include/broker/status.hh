@@ -15,6 +15,7 @@
 
 #include "broker/endpoint_info.hh"
 
+#include "broker/detail/assert.hh"
 #include "broker/detail/operators.hh"
 #include "broker/detail/type_traits.hh"
 
@@ -62,6 +63,14 @@ public:
   make(endpoint_info ei, std::string msg) {
     status s;
     s.code_ = S;
+    s.context_ = caf::make_message(std::move(ei), std::move(msg));
+    return s;
+  }
+
+  static status make(sc code, endpoint_info ei, std::string msg) {
+    BROKER_ASSERT(code != sc::unspecified);
+    status s;
+    s.code_ = code;
     s.context_ = caf::make_message(std::move(ei), std::move(msg));
     return s;
   }

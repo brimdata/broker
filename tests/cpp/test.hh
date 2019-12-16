@@ -4,7 +4,7 @@
 #define CAF_SUITE SUITE
 #endif
 
-#include <caf/test/unit_test.hpp>
+#include <caf/test/dsl.hpp>
 
 #include <caf/actor_system.hpp>
 #include <caf/scheduler/test_coordinator.hpp>

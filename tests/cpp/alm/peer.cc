@@ -4,8 +4,6 @@
 
 #include "test.hh"
 
-#include <caf/test/io_dsl.hpp>
-
 #include "broker/alm/async_transport.hh"
 #include "broker/alm/peer.hh"
 #include "broker/alm/stream_transport.hh"

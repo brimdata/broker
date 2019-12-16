@@ -2,12 +2,15 @@
 
 #include <vector>
 
+#include <caf/broadcast_downstream_manager.hpp>
 #include <caf/cow_tuple.hpp>
 #include <caf/detail/unordered_flat_map.hpp>
+#include <caf/fused_downstream_manager.hpp>
 
 #include "broker/alm/peer.hh"
 #include "broker/alm/routing_table.hh"
 #include "broker/detail/lift.hh"
+#include "broker/detail/prefix_matcher.hh"
 #include "broker/filter_type.hh"
 #include "broker/message.hh"
 
@@ -59,7 +62,7 @@ public:
     using batch = std::vector<element>;
 
     /// Type of the downstream_manager that broadcasts data to local actors.
-    using manager = caf::broadcast_downstream_manager<element, peer_filter>;
+    using manager = caf::broadcast_downstream_manager<element>;
   };
 
   /// Composed downstream_manager type for bundled dispatching.
@@ -274,7 +277,7 @@ public:
     auto islot = d.add_unchecked_inbound_path(in);
     hdl_to_ostream_[hdl] = oslot;
     hdl_to_istream_[hdl] = islot;
-    finalize_peering(remote_id);
+    d.peer_added(remote_id);
     return oslot;
   }
 
@@ -305,21 +308,33 @@ public:
                    << remote_id);
       return;
     }
-    finalize_peering(remote_id);
+    d.peer_added(remote_id);
     // Add inbound streaming slot for this connection.
     hdl_to_istream_[hdl] = d.add_unchecked_inbound_path(in);
   }
 
   // -- callbacks --------------------------------------------------------------
 
+  /// Pushes `msg` to local workers.
   void ship_locally(const data_message& msg) {
     if (!worker_manager().paths().empty())
       worker_manager().push(msg);
   }
 
+  /// Pushes `msg` to local stores.
   void ship_locally(const command_message& msg) {
     if (!store_manager().paths().empty())
       store_manager().push(msg);
+  }
+
+  /// Sends `('peer', 'ok', <id>)` to peering listeners.
+  void peer_added(const peer_id_type& remote_id) {
+    auto i = ongoing_peerings_.find(remote_id);
+    if (i == ongoing_peerings_.end())
+      return;
+    for (auto& rp : i->second)
+      rp.deliver(atom::peer::value, atom::ok::value, remote_id);
+    ongoing_peerings_.erase(i);
   }
 
   // -- overridden member functions of caf::stream_manager ---------------------
@@ -382,15 +397,6 @@ public:
   }
 
 protected:
-  void finalize_peering(const peer_id_type& remote_id) {
-    auto i = ongoing_peerings_.find(remote_id);
-    if (i == ongoing_peerings_.end())
-      return;
-    for (auto& rp : i->second)
-      rp.deliver(atom::peer::value, atom::ok::value, remote_id);
-    ongoing_peerings_.erase(i);
-  }
-
   /// Organizes downstream communication to peers as well as local subscribers.
   downstream_manager_type out_;
 

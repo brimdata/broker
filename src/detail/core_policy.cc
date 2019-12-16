@@ -128,23 +128,6 @@ void core_policy::ack_open_failure(stream_slot slot,
   }
 }
 
-void core_policy::push_to_substreams(std::vector<message> xs) {
-  // Dispatch on the content of `xs`.
-  for (auto& x : xs) {
-    if (x.match_elements<topic, data>()) {
-      x.force_unshare();
-      workers().push(std::move(x.get_mutable_as<topic>(0)),
-                     std::move(x.get_mutable_as<data>(1)));
-    } else if (x.match_elements<topic, internal_command>()) {
-      x.force_unshare();
-      stores().push(std::move(x.get_mutable_as<topic>(0)),
-                    std::move(x.get_mutable_as<internal_command>(1)));
-    }
-  }
-  workers().emit_batches();
-  stores().emit_batches();
-}
-
 // -- status updates to the state ----------------------------------------------
 
 void core_policy::peer_lost(const actor& hdl) {

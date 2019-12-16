@@ -119,8 +119,6 @@ public:
                         const caf::actor_addr& rebind_from,
                         caf::strong_actor_ptr rebind_to);
 
-  void push_to_substreams(std::vector<caf::message> vec);
-
   // -- topic management -------------------------------------------------------
 
   /// Adds `what` to our filter and updates all peers on changes.

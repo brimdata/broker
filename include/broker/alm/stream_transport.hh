@@ -19,7 +19,11 @@ class stream_transport : public peer<Derived, PeerId, caf::actor>,
 public:
   // -- member types -----------------------------------------------------------
 
+  using super = peer<Derived, PeerId, caf::actor>;
+
   using peer_id_type = PeerId;
+
+  using message_type = typename super::message_type;
 
   /// Helper trait for defining streaming-related types for local actors
   /// (workers and stores).
@@ -42,12 +46,15 @@ public:
   /// Streaming-related types for stores.
   using store_trait = local_trait<internal_command>;
 
-  using peer_message = generic_node_message<peer_id_type>;
+  /// Streaming-related types for sources that produce both types of messages.
+  struct var_trait {
+    using batch = std::vector<node_message_content>;
+  };
 
   /// Streaming-related types for peers.
   struct peer_trait {
     /// Type of a single element in the stream.
-    using element = peer_message;
+    using element = message_type;
 
     using batch = std::vector<element>;
 
@@ -109,9 +116,17 @@ public:
     return out_.template get<typename peer_trait::manager>();
   }
 
+  auto& worker_manager() {
+    return out_.template get<typename worker_trait::manager>();
+  }
+
+  auto& store_manager() {
+    return out_.template get<typename store_trait::manager>();
+  }
+
   // -- sending ----------------------------------------------------------------
 
-  void stream_send(const caf::actor& receiver, peer_message& msg) {
+  void stream_send(const caf::actor& receiver, message_type& msg) {
     // Fetch the output slot for reaching the receiver.
     auto i = hdl_to_ostream_.find(receiver);
     if (i == hdl_to_ostream_.end()) {
@@ -140,13 +155,13 @@ public:
   // Subscriptions bypass the stream.
   template <class... Ts>
   void send(const caf::actor& receiver, atom::subscribe atm, Ts&&... xs) {
-    async_send(receiver, atm, std::forward<Ts>(xs)...);
+    dref().async_send(receiver, atm, std::forward<Ts>(xs)...);
   }
 
   // Published messages use the streams.
   template <class T>
   void send(const caf::actor& receiver, atom::publish, T msg) {
-    stream_send(receiver, msg);
+    dref().stream_send(receiver, msg);
   }
 
   // -- peering ----------------------------------------------------------------
@@ -155,11 +170,25 @@ public:
   void start_peering(const peer_id_type& remote_peer, const caf::actor& hdl) {
     BROKER_TRACE(BROKER_ARG(remote_peer) << BROKER_ARG(hdl));
     auto& d = dref();
+    auto rp = self()->make_response_promise();
     // We avoid conflicts in the handshake process by always having the node
     // with the smaller ID initiate the peering. Otherwise, we could end up in a
     // deadlock during handshake if both sides send step 1 at the sime time.
     if (remote_peer < d.id()) {
-      self()->send(hdl, atom::peer::value, d.id(), self());
+      self()
+        ->request(hdl, std::chrono::minutes(10), atom::peer::value, d.id(),
+                  self())
+        .then(
+          [=](atom::peer, atom::ok, const peer_id_type& from) mutable {
+            if (from != remote_peer) {
+              BROKER_ERROR("received peering response from unknown peer");
+              rp.deliver(make_error(ec::peer_invalid, "unexpected peer ID",
+                                    from, remote_peer));
+              return;
+            }
+            rp.deliver(atom::peer::value, atom::ok::value, from);
+          },
+          [=](caf::error& err) mutable { rp.deliver(std::move(err)); });
       return;
     }
     if (d.tbl().count(remote_peer) != 0) {
@@ -167,16 +196,19 @@ public:
                   << remote_peer);
       return;
     }
-    if (!ongoing_peerings_.emplace(remote_peer).second) {
+    auto i = ongoing_peerings_.find(remote_peer);
+    if (i != ongoing_peerings_.end()) {
       BROKER_DEBUG("already started peering to " << remote_peer);
+      i->second.emplace_back(self()->make_response_promise());
       return;
     }
+    ongoing_peerings_[remote_peer].emplace_back(std::move(rp));
     self()->send(hdl, atom::peer::value, self(), d.id(), d.subscriptions(),
                  d.timestamp());
   }
 
   // Establishes a stream from B to A.
-  caf::outbound_stream_slot<peer_message, caf::actor, peer_id_type, filter_type,
+  caf::outbound_stream_slot<message_type, caf::actor, peer_id_type, filter_type,
                             uint64_t>
   handle_peering_request(const caf::actor& hdl, const peer_id_type& remote_id,
                          const filter_type& topics, uint64_t timestamp) {
@@ -201,7 +233,7 @@ public:
     // sending our subscriptions, timestamp, etc. as handshake data.
     auto data = std::make_tuple(caf::actor_cast<caf::actor>(self()), d.id(),
                               d.subscriptions(), d.timestamp());
-    auto slot = d.template add_unchecked_outbound_path<peer_message>(
+    auto slot = d.template add_unchecked_outbound_path<message_type>(
       hdl, std::move(data));
     out_.template assign<typename peer_trait::manager>(slot);
     hdl_to_ostream_[hdl] = slot;
@@ -209,8 +241,8 @@ public:
   }
 
   // Acks the stream from B to A and establishes a stream from A to B.
-  caf::outbound_stream_slot<peer_message, caf::actor, peer_id_type>
-  handle_peering_handshake_1(caf::stream<peer_message> in,
+  caf::outbound_stream_slot<message_type, caf::actor, peer_id_type>
+  handle_peering_handshake_1(caf::stream<message_type> in,
                              const caf::actor& hdl,
                              const peer_id_type& remote_id,
                              const filter_type& topics, uint64_t timestamp) {
@@ -236,18 +268,18 @@ public:
     }
     // Add streaming slots for this connection.
     auto data = std::make_tuple(caf::actor_cast<caf::actor>(self()), d.id());
-    auto oslot = d.template add_unchecked_outbound_path<peer_message>(
+    auto oslot = d.template add_unchecked_outbound_path<message_type>(
       hdl, std::move(data));
     out_.template assign<typename peer_trait::manager>(oslot);
     auto islot = d.add_unchecked_inbound_path(in);
     hdl_to_ostream_[hdl] = oslot;
     hdl_to_istream_[hdl] = islot;
-    ongoing_peerings_.erase(remote_id);
+    finalize_peering(remote_id);
     return oslot;
   }
 
   // Acks the stream from A to B.
-  void handle_peering_handshake_2(caf::stream<peer_message> in,
+  void handle_peering_handshake_2(caf::stream<message_type> in,
                                   const caf::actor& hdl,
                                   const peer_id_type& remote_id) {
     BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(remote_id));
@@ -273,9 +305,21 @@ public:
                    << remote_id);
       return;
     }
-    ongoing_peerings_.erase(remote_id);
+    finalize_peering(remote_id);
     // Add inbound streaming slot for this connection.
     hdl_to_istream_[hdl] = d.add_unchecked_inbound_path(in);
+  }
+
+  // -- callbacks --------------------------------------------------------------
+
+  void ship_locally(const data_message& msg) {
+    if (!worker_manager().paths().empty())
+      worker_manager().push(msg);
+  }
+
+  void ship_locally(const command_message& msg) {
+    if (!store_manager().paths().empty())
+      store_manager().push(msg);
   }
 
   // -- overridden member functions of caf::stream_manager ---------------------
@@ -283,11 +327,26 @@ public:
   void
   handle(caf::inbound_path* path, caf::downstream_msg::batch& batch) override {
     BROKER_TRACE(CAF_ARG(path) << CAF_ARG(batch));
+    auto& d = dref();
     using peer_batch = typename peer_trait::batch;
     if (batch.xs.template match_elements<peer_batch>()) {
       for (auto& x : batch.xs.template get_mutable_as<peer_batch>(0))
-        dref().handle_publication(x);
+        d.handle_publication(x);
+      return;
     }
+    auto try_publish = [&](auto trait) {
+      using batch_type = typename decltype(trait)::batch;
+      if (batch.xs.template match_elements<batch_type>()) {
+        for (auto& x : batch.xs.template get_mutable_as<batch_type>(0))
+          d.publish(x);
+        return true;
+      }
+      return false;
+    };
+    if (try_publish(worker_trait{}) || try_publish(store_trait{})
+        || try_publish(var_trait{}))
+      return;
+    BROKER_ERROR("unexpected batch:" << deep_to_string(batch));
   }
 
   bool done() const override {
@@ -314,7 +373,8 @@ public:
       lift<atom::peer>(d, &Derived::handle_peering_request),
       lift<>(d, &Derived::handle_peering_handshake_1),
       lift<>(d, &Derived::handle_peering_handshake_2),
-      lift<atom::publish>(d, &Derived::publish),
+      lift<atom::publish>(d, &Derived::publish_data),
+      lift<atom::publish>(d, &Derived::publish_command),
       lift<atom::subscribe>(d, &Derived::subscribe),
       lift<atom::publish>(d, &Derived::handle_publication),
       lift<atom::subscribe>(d, &Derived::handle_subscription),
@@ -322,6 +382,15 @@ public:
   }
 
 protected:
+  void finalize_peering(const peer_id_type& remote_id) {
+    auto i = ongoing_peerings_.find(remote_id);
+    if (i == ongoing_peerings_.end())
+      return;
+    for (auto& rp : i->second)
+      rp.deliver(atom::peer::value, atom::ok::value, remote_id);
+    ongoing_peerings_.erase(i);
+  }
+
   /// Organizes downstream communication to peers as well as local subscribers.
   downstream_manager_type out_;
 
@@ -332,7 +401,7 @@ protected:
   hdl_to_slot_map hdl_to_istream_;
 
   /// Stores nodes we have in-flight peering handshakes to.
-  std::set<peer_id_type> ongoing_peerings_;
+  std::map<peer_id_type, std::vector<caf::response_promise>> ongoing_peerings_;
 
 private:
   Derived& dref() {

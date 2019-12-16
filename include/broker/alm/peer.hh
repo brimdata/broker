@@ -101,7 +101,8 @@ public:
                   timestamp_);
   }
 
-  void publish(data_message& content) {
+  template <class T>
+  void publish(T& content) {
     auto& topic = get_topic(content);
     std::vector<peer_id_type> receivers;
     for (auto& kvp : peer_subscriptions_)
@@ -114,9 +115,23 @@ public:
     }
     message_type msg{std::move(content), ttl_, std::move(receivers)};
     BROKER_ASSERT(ttl_ > 0);
-    ship(msg);
+    dref().ship(msg);
   }
 
+  void publish(node_message_content& content) {
+    if (is_data_message(content))
+      publish(get<data_message>(content));
+    else
+      publish(get<command_message>(content));
+  }
+
+  void publish_data(data_message& content) {
+    publish(content);
+  }
+
+  void publish_command(command_message& content) {
+    publish(content);
+  }
 
   void handle_subscription(std::vector<peer_id_type>& path,
                            const std::vector<topic>& topics,
@@ -187,7 +202,10 @@ public:
     auto i = std::remove(receivers.begin(), receivers.end(), dref().id());
     if (i != receivers.end()) {
       receivers.erase(i, receivers.end());
-      dref().ship_locally(msg);
+      if (is_data_message(msg))
+        dref().ship_locally(get_data_message(msg));
+      else
+        dref().ship_locally(get_command_message(msg));
     }
     if (!receivers.empty()) {
       if (ttl == 0) {
@@ -198,7 +216,6 @@ public:
     }
   }
 
-private:
   /// Forwards `msg` to all `receivers`.
   void ship(message_type& msg) {
     // Use one bucket for each direct connection. Then put all receivers into
@@ -249,6 +266,14 @@ private:
     }
   }
 
+  // -- callback ---------------------------------------------------------------
+
+  template <class T>
+  void ship_locally(const T&) {
+    // nop; fallback implementation
+  }
+
+private:
   Derived& dref() {
     return static_cast<Derived&>(*this);
   }

@@ -55,10 +55,6 @@ public:
     return self_;
   }
 
-  void ship_locally(message_type&) {
-    // nop
-  }
-
   bool connected_to(const caf::actor& hdl) const noexcept {
     auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
     return std::any_of(tbl().begin(), tbl().end(), predicate);
@@ -100,11 +96,14 @@ public:
     id_ = std::move(new_id);
   }
 
-  void ship_locally(message_type& msg) {
-    buf.emplace_back(std::move(msg));
+  template <class T>
+  void ship_locally(const T& msg) {
+    if constexpr (std::is_same<T, data_message>::value)
+      buf.emplace_back(msg);
+    super::ship_locally(msg);
   }
 
-  std::vector<message_type> buf;
+  std::vector<data_message> buf;
 
 private:
   peer_id id_;

@@ -8,6 +8,7 @@
 
 #include "broker/alm/async_transport.hh"
 #include "broker/alm/peer.hh"
+#include "broker/alm/stream_transport.hh"
 #include "broker/configuration.hh"
 #include "broker/detail/lift.hh"
 #include "broker/endpoint.hh"
@@ -15,6 +16,7 @@
 
 using broker::alm::async_transport;
 using broker::alm::peer;
+using broker::alm::stream_transport;
 using broker::detail::lift;
 
 using namespace broker;
@@ -32,9 +34,12 @@ node_message make_message(Topic&& t, Data&& d, uint16_t ttl,
           std::move(receivers)};
 }
 
-class peer_actor_state : public async_transport<peer_actor_state, peer_id> {
+// -- async transport ----------------------------------------------------------
+
+class async_peer_actor_state
+  : public async_transport<async_peer_actor_state, peer_id> {
 public:
-  peer_actor_state(caf::event_based_actor* self) : self_(self) {
+  async_peer_actor_state(caf::event_based_actor* self) : self_(self) {
     // nop
   }
 
@@ -54,19 +59,78 @@ public:
     // nop
   }
 
+  bool connected_to(const caf::actor& hdl) const noexcept {
+    auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
+    return std::any_of(tbl().begin(), tbl().end(), predicate);
+  }
+
 private:
   caf::event_based_actor* self_;
   peer_id id_;
 };
 
-using peer_actor_type = caf::stateful_actor<peer_actor_state>;
+using async_peer_actor_type = caf::stateful_actor<async_peer_actor_state>;
 
-caf::behavior peer_actor(peer_actor_type* self, peer_id id) {
-  using state_type = peer_actor_state;
-  self->state.id(std::move(id));
-  auto& st = self->state;
-  return self->state.make_behavior();
-}
+struct async_peer_actor {
+  using type = async_peer_actor_type;
+
+  caf::behavior operator()(async_peer_actor_type* self, peer_id id) const {
+    auto& st = self->state;
+    st.id(std::move(id));
+    return st.make_behavior();
+  }
+};
+
+// -- stream transport ---------------------------------------------------------
+
+class stream_peer_manager
+: public stream_transport<stream_peer_manager, peer_id> {
+public:
+  using super = stream_transport<stream_peer_manager, peer_id>;
+
+  stream_peer_manager(caf::event_based_actor* self) : super(self) {
+    // nop
+  }
+
+  const auto& id() const noexcept {
+    return id_;
+  }
+
+  void id(peer_id new_id) noexcept {
+    id_ = std::move(new_id);
+  }
+
+  void ship_locally(message_type& msg) {
+    buf.emplace_back(std::move(msg));
+  }
+
+  std::vector<message_type> buf;
+
+private:
+  peer_id id_;
+};
+
+struct stream_peer_actor_state {
+  caf::intrusive_ptr<stream_peer_manager> mgr;
+  bool connected_to(const caf::actor& hdl) const noexcept {
+    return mgr->connected_to(hdl);
+  }
+};
+
+using stream_peer_actor_type = caf::stateful_actor<stream_peer_actor_state>;
+
+struct stream_peer_actor {
+  using type = stream_peer_actor_type;
+
+  caf::behavior operator()(type* self, peer_id id) const {
+    auto& mgr= self->state.mgr;
+    mgr = caf::make_counted<stream_peer_manager>(self);
+    mgr->id(std::move(id));
+    return mgr->make_behavior();
+  }
+};
+
+// -- fixture ------------------------------------------------------------------
 
 // In this fixture, we're setting up this messy topology full of loops:
 //
@@ -96,12 +160,13 @@ caf::behavior peer_actor(peer_actor_type* self, peer_id id) {
 //                               +-----+ H +----------+
 //                                     +---+
 //
+template<class ActorImpl>
 struct fixture : test_coordinator_fixture<> {
   using peer_ids = std::vector<peer_id>;
 
   fixture() {
     for (auto& id : peer_ids{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"})
-      peers[id] = sys.spawn(peer_actor, id);
+      peers[id] = sys.spawn(ActorImpl{}, id);
     std::map<peer_id, peer_ids> connections{
       {"A", {"B", "C", "J"}},      {"B", {"A", "D", "E"}},
       {"C", {"A", "F", "G", "H"}}, {"D", {"B", "I"}},
@@ -113,6 +178,15 @@ struct fixture : test_coordinator_fixture<> {
       for (auto& link : links)
         anon_send(peers[id], atom::peer::value, link, peers[link]);
     run();
+    BROKER_ASSERT(get("A").connected_to(peers["B"]));
+    BROKER_ASSERT(get("A").connected_to(peers["C"]));
+    BROKER_ASSERT(get("A").connected_to(peers["J"]));
+    BROKER_ASSERT(not get("A").connected_to(peers["D"]));
+    BROKER_ASSERT(not get("A").connected_to(peers["E"]));
+    BROKER_ASSERT(not get("A").connected_to(peers["F"]));
+    BROKER_ASSERT(not get("A").connected_to(peers["G"]));
+    BROKER_ASSERT(not get("A").connected_to(peers["H"]));
+    BROKER_ASSERT(not get("A").connected_to(peers["I"]));
   }
 
   ~fixture() {
@@ -121,7 +195,7 @@ struct fixture : test_coordinator_fixture<> {
   }
 
   auto& get(const peer_id& id) {
-    return deref<peer_actor_type>(peers[id]).state;
+    return deref<typename ActorImpl::type>(peers[id]).state;
   }
 
   std::map<peer_id, caf::actor> peers;
@@ -150,7 +224,9 @@ bool operator==(const message_type& x, const message_pattern& y) {
 
 } // namespace
 
-FIXTURE_SCOPE(multi_hop_routing_tests, fixture)
+// -- async transport tests ----------------------------------------------------
+
+FIXTURE_SCOPE(async_peer_tests, fixture<async_peer_actor>)
 
 #define CHECK_DISTANCE(src, dst, val)                                          \
   CHECK_EQUAL(get(src).distance_to(dst), size_t{val})
@@ -181,6 +257,31 @@ TEST(topologies with loops resolve to simple forwarding tables) {
          from(peers["C"])
            .to(peers["G"])
            .with(_, message_pattern{"foo", 42, peer_vec{"G"}}));
+}
+
+FIXTURE_SCOPE_END()
+
+// -- stream transport tests ---------------------------------------------------
+
+FIXTURE_SCOPE(stream_peer_tests, fixture<stream_peer_actor>)
+
+TEST(only receivers forward messages locally) {
+  MESSAGE("after all links are connected, G subscribes to topic 'foo'");
+  anon_send(peers["G"], atom::subscribe::value, filter_type{topic{"foo"}});
+  run();
+  MESSAGE("publishing to foo on A will result in only G having the message");
+  anon_send(peers["A"], atom::publish::value, make_data_message("foo", 42));
+  run();
+  CHECK_EQUAL(get("A").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get("B").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get("C").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get("D").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get("E").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get("F").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get("G").mgr->buf.size(), 1u);
+  CHECK_EQUAL(get("H").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get("I").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get("J").mgr->buf.size(), 0u);
 }
 
 FIXTURE_SCOPE_END()

@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
+
+#include "broker/optional.hh"
 
 namespace broker::alm {
 
@@ -35,5 +38,17 @@ auto inspect(Inspector& f, routing_table_row<PeerId, CommunicationHandle>& x) {
 template <class PeerId, class CommunicationHandle>
 using routing_table
   = std::map<PeerId, routing_table_row<PeerId, CommunicationHandle>>;
+
+template <class PeerId, class CommunicationHandle>
+optional<PeerId>
+get_peer_id(const routing_table<PeerId, CommunicationHandle>& tbl,
+            const CommunicationHandle& hdl) {
+  auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
+  auto e = tbl.end();
+  auto i = std::find_if(tbl.begin(), e, predicate);
+  if (i != e)
+    return i->first;
+  return nil;
+}
 
 } // namespace broker::alm

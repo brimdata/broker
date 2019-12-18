@@ -30,6 +30,8 @@ enum class ec : uint8_t {
   peer_invalid,
   /// Remote peer not listening.
   peer_unavailable,
+  /// Remote peer closed the connection during handshake.
+  peer_disconnect_during_handshake,
   /// An peering request timed out.
   peer_timeout,
   /// Master with given name already exist.

@@ -29,14 +29,17 @@ public:
     statuses_ = groups.get_local("broker/statuses");
   }
 
-  void peer_added(const peer_id_type& remote_id) {
+  void peer_connected(const peer_id_type& remote_id,
+                      const communication_handle_type& hdl) {
     emit(remote_id, sc::peer_added, "handshake successful");
-    super::peer_added(remote_id);
+    super::peer_connected(remote_id, hdl);
   }
 
-  void peer_lost(const peer_id_type& remote_id) {
+  void peer_disconnected(const peer_id_type& remote_id,
+                         const communication_handle_type& hdl,
+                         const error& reason) {
     emit(remote_id, sc::peer_lost, "lost connection to remote peer");
-    super::peer_lost(remote_id);
+    super::peer_disconnected(remote_id, hdl, reason);
   }
 
 private:

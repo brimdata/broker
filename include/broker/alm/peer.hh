@@ -7,25 +7,30 @@
 
 #include "broker/alm/routing_table.hh"
 #include "broker/atoms.hh"
+#include "broker/error.hh"
 #include "broker/filter_type.hh"
 #include "broker/logger.hh"
 #include "broker/message.hh"
 
 namespace broker::alm {
 
-/// CRTP base class for represents a Broker peer in the network. The `Derived`
-/// class must provide the following interface:
+/// CRTP base class that represents a Broker peer in the network. This class
+/// implements subscription and path management for the overlay. Data transport
+/// as well as shipping data to local subscribers is implemented by `Derived`.
+///
+/// The derived class *must* provide the following interface:
 ///
 /// ~~~
 /// class Derived {
 ///   template <class... Ts>
 ///   void send(const CommunicationHandle& receiver, Ts&&... xs);
 ///
-///   void ship_locally(message_type&);
-///
 ///   const PeerId& id() const noexcept;
 /// };
 /// ~~~
+///
+/// The derived class *can* extend any of the callback member functions by
+/// hiding the implementation of ::peer.
 template <class Derived, class PeerId, class CommunicationHandle>
 class peer {
 public:
@@ -103,7 +108,7 @@ public:
   }
 
   template <class T>
-  void publish(T& content) {
+  void publish(const T& content) {
     auto& topic = get_topic(content);
     std::vector<peer_id_type> receivers;
     for (auto& kvp : peer_subscriptions_)
@@ -114,7 +119,7 @@ public:
       puts("no subscribers found for topic");
       return;
     }
-    message_type msg{std::move(content), ttl_, std::move(receivers)};
+    message_type msg{content, ttl_, std::move(receivers)};
     BROKER_ASSERT(ttl_ > 0);
     dref().ship(msg);
   }
@@ -267,11 +272,36 @@ public:
     }
   }
 
-  // -- callback ---------------------------------------------------------------
+  // -- callbacks --------------------------------------------------------------
 
+  /// Called whenever new data for local subscribers became available.
+  /// @param msg Data or command message, either received by peers or generated
+  ///            from a local publisher.
+  /// @tparam T Either ::data_message or ::command_message.
   template <class T>
-  void ship_locally(const T&) {
-    // nop; fallback implementation
+  void ship_locally([[maybe_unused]] const T& msg) {
+    // nop
+  }
+
+  /// Called whenever this peer established a new connection.
+  /// @param remote_id ID of the newly connected peer.
+  /// @param hdl Communication handle for exchanging messages with the new peer.
+  /// @note The new peer gets stored in the routing table *before* calling this
+  ///       member function.
+  void peer_connected([[maybe_unused]] const peer_id_type& remote_id,
+                      [[maybe_unused]] const communication_handle_type& hdl) {
+    // nop
+  }
+
+  /// Called whenever this peer lost connection to a remote peer.
+  /// @param remote_id ID of the disconnected peer.
+  /// @param hdl Communication handle for exchanging messages with the new peer.
+  /// @param reason None if we closed the connection gracefully, otherwise
+  ///               contains the transport-specific error code.
+  void peer_disconnected([[maybe_unused]] const peer_id_type& remote_id,
+                         [[maybe_unused]] const communication_handle_type& hdl,
+                         [[maybe_unused]] const error& reason) {
+    tbl_.erase(remote_id);
   }
 
 private:
@@ -279,7 +309,9 @@ private:
     return static_cast<Derived&>(*this);
   }
 
-  /// Stores routing information for reaching other peers.
+  /// Stores routing information for reaching other peers. The *transport* adds
+  /// new entries to this table (before calling ::peer_connected) and the peer
+  /// removes entries in its ::peer_disconnected callback implementation.
   routing_table_type tbl_;
 
   /// Stores the maximum distance to any node.

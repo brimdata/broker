@@ -11,6 +11,7 @@
 #include "broker/alm/routing_table.hh"
 #include "broker/detail/lift.hh"
 #include "broker/detail/prefix_matcher.hh"
+#include "broker/error.hh"
 #include "broker/filter_type.hh"
 #include "broker/message.hh"
 
@@ -27,6 +28,11 @@ public:
   using peer_id_type = PeerId;
 
   using message_type = typename super::message_type;
+
+  struct pending_connection {
+    caf::actor hdl;
+    std::vector<caf::response_promise> promises;
+  };
 
   /// Helper trait for defining streaming-related types for local actors
   /// (workers and stores).
@@ -199,13 +205,15 @@ public:
                   << remote_peer);
       return;
     }
-    auto i = ongoing_peerings_.find(remote_peer);
-    if (i != ongoing_peerings_.end()) {
+    auto i = pending_connections_.find(remote_peer);
+    if (i != pending_connections_.end()) {
       BROKER_DEBUG("already started peering to " << remote_peer);
-      i->second.emplace_back(self()->make_response_promise());
+      i->second.promises.emplace_back(self()->make_response_promise());
       return;
     }
-    ongoing_peerings_[remote_peer].emplace_back(std::move(rp));
+    auto&pending=pending_connections_[remote_peer];
+    pending.hdl = hdl;
+    pending.promises.emplace_back(std::move(rp));
     self()->send(hdl, atom::peer::value, self(), d.id(), d.subscriptions(),
                  d.timestamp());
   }
@@ -277,7 +285,7 @@ public:
     auto islot = d.add_unchecked_inbound_path(in);
     hdl_to_ostream_[hdl] = oslot;
     hdl_to_istream_[hdl] = islot;
-    d.peer_added(remote_id);
+    d.peer_connected(remote_id, hdl);
     return oslot;
   }
 
@@ -308,7 +316,7 @@ public:
                    << remote_id);
       return;
     }
-    d.peer_added(remote_id);
+    d.peer_connected(remote_id, hdl);
     // Add inbound streaming slot for this connection.
     hdl_to_istream_[hdl] = d.add_unchecked_inbound_path(in);
   }
@@ -319,29 +327,37 @@ public:
   void ship_locally(const data_message& msg) {
     if (!worker_manager().paths().empty())
       worker_manager().push(msg);
+    super::ship_locally(msg);
   }
 
   /// Pushes `msg` to local stores.
   void ship_locally(const command_message& msg) {
     if (!store_manager().paths().empty())
       store_manager().push(msg);
+    super::ship_locally(msg);
   }
 
   /// Sends `('peer', 'ok', <id>)` to peering listeners.
-  void peer_added(const peer_id_type& remote_id) {
-    auto i = ongoing_peerings_.find(remote_id);
-    if (i == ongoing_peerings_.end())
+  void peer_connected(const peer_id_type& remote_id, const caf::actor& hdl) {
+    auto i = pending_connections_.find(remote_id);
+    if (i == pending_connections_.end())
       return;
-    for (auto& rp : i->second)
-      rp.deliver(atom::peer::value, atom::ok::value, remote_id);
-    ongoing_peerings_.erase(i);
+    for (auto& promise : i->second.promises)
+      promise.deliver(atom::peer::value, atom::ok::value, remote_id);
+    pending_connections_.erase(i);
+    super::peer_connected(remote_id, hdl);
+  }
+
+  void peer_disconnected(const peer_id_type& remote_id, const caf::actor& hdl,
+                         const error& reason) {
+    super::peer_disconnected(remote_id, hdl, reason);
   }
 
   // -- overridden member functions of caf::stream_manager ---------------------
 
-  void
-  handle(caf::inbound_path* path, caf::downstream_msg::batch& batch) override {
-    BROKER_TRACE(CAF_ARG(path) << CAF_ARG(batch));
+  void handle(caf::inbound_path* path,
+              caf::downstream_msg::batch& batch) override {
+    BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(batch));
     auto& d = dref();
     using peer_batch = typename peer_trait::batch;
     if (batch.xs.template match_elements<peer_batch>()) {
@@ -362,6 +378,31 @@ public:
         || try_publish(var_trait{}))
       return;
     BROKER_ERROR("unexpected batch:" << deep_to_string(batch));
+  }
+
+  void handle(caf::inbound_path* path, caf::downstream_msg::close& x) override {
+    BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(x));
+    if (path->hdl == nullptr) {
+      BROKER_ERROR("closed inbound path with invalid communication handle");
+    } else {
+      auto hdl = caf::actor_cast<caf::actor>(path->hdl);
+      error dummy;
+      inbound_path_disconnect(hdl, dummy);
+    }
+    caf::stream_manager::handle(path, x);
+  }
+
+  void handle(caf::inbound_path* path,
+              caf::downstream_msg::forced_close& x) override {
+    BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(x));
+    if (path->hdl == nullptr) {
+      BROKER_ERROR("closed inbound path with invalid communication handle");
+    } else {
+      auto hdl = caf::actor_cast<caf::actor>(path->hdl);
+      error dummy;
+      inbound_path_disconnect(hdl, dummy);
+    }
+    caf::stream_manager::handle(path, x);
   }
 
   bool done() const override {
@@ -397,6 +438,45 @@ public:
   }
 
 protected:
+  void inbound_path_disconnect(const caf::actor& hdl, const error& err) {
+    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(err));
+    // Remove state associating the handle to a stream slot. If this fails,
+    // check whether we lost the peer during the handshake.
+    if (hdl_to_istream_.erase(hdl) == 0) {
+      auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
+      auto e = pending_connections_.end();
+      auto i = std::find_if(pending_connections_.begin(), e, predicate);
+      if (i == e) {
+        // Not an error. Usually means that we've received an upstream_msg::drop
+        // message earlier that cleared all the state already.
+        BROKER_DEBUG("closed inbound path to unknown peer");
+        return;
+      }
+      error reason = ec::peer_disconnect_during_handshake;
+      for (auto& promise : i->second.promises)
+        promise.deliver(reason);
+      pending_connections_.erase(i);
+      return;
+    }
+    // Fetch the node ID from the routing table and invoke callbacks.
+    auto& d = dref();
+    if (auto remote_id = get_peer_id(d.tbl(), hdl)) {
+      // peer::peer_disconnected ultimately removes the entry from the table.
+      error reason;
+      d.peer_disconnected(*remote_id, hdl, reason);
+    } else {
+      BROKER_ERROR("closed inbound path to a peer without routing table entry");
+    }
+    // Close the associated outbound path.
+    auto i = hdl_to_ostream_.find(hdl);
+    if (i == hdl_to_ostream_.end()){
+      BROKER_WARNING("closed inbound path to a peer that had no outbound path");
+      return;
+    }
+    out_.close(i->second);
+    hdl_to_ostream_.erase(i);
+  }
+
   /// Organizes downstream communication to peers as well as local subscribers.
   downstream_manager_type out_;
 
@@ -407,7 +487,7 @@ protected:
   hdl_to_slot_map hdl_to_istream_;
 
   /// Stores nodes we have in-flight peering handshakes to.
-  std::map<peer_id_type, std::vector<caf::response_promise>> ongoing_peerings_;
+  std::map<peer_id_type, pending_connection> pending_connections_;
 
 private:
   Derived& dref() {

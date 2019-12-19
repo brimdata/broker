@@ -36,6 +36,7 @@ using update = caf::update_atom;
 
 using ack = caf::atom_constant<caf::atom("ack")>;
 using default_ = caf::atom_constant<caf::atom("default")>;
+using id = caf::atom_constant<caf::atom("id")>;
 using init = caf::atom_constant<caf::atom("init")>;
 using name = caf::atom_constant<caf::atom("name")>;
 using network = caf::atom_constant<caf::atom("network")>;

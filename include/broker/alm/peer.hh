@@ -7,6 +7,7 @@
 
 #include "broker/alm/routing_table.hh"
 #include "broker/atoms.hh"
+#include "broker/detail/lift.hh"
 #include "broker/error.hh"
 #include "broker/filter_type.hh"
 #include "broker/logger.hh"
@@ -31,6 +32,28 @@ namespace broker::alm {
 ///
 /// The derived class *can* extend any of the callback member functions by
 /// hiding the implementation of ::peer.
+///
+/// The peer registers these message handlers:
+///
+/// ~~~
+/// (atom::get, atom::id)
+/// -> peer_id_type id()
+///
+/// (atom::publish, data_message)
+/// -> void publish_data(...)
+///
+/// (atom::publish, command_message)
+/// -> void publish_command(...)
+///
+/// (atom::subscribe, filter_type)
+/// -> void subscribe(...)
+///
+/// (atom::publish, node_message)
+/// -> void handle_publication(...)
+///
+/// (atom::subscribe, vector<peer_id_type>, vector<topic>, uint64_t)
+/// -> void handle_subscription(...)
+/// ~~~
 template <class Derived, class PeerId, class CommunicationHandle>
 class peer {
 public:
@@ -302,6 +325,23 @@ public:
                          [[maybe_unused]] const communication_handle_type& hdl,
                          [[maybe_unused]] const error& reason) {
     tbl_.erase(remote_id);
+  }
+
+  // -- factories --------------------------------------------------------------
+
+  template <class... Fs>
+  caf::behavior make_behavior(Fs... fs) {
+    using detail::lift;
+    auto& d = dref();
+    return {
+      std::move(fs)...,
+      lift<atom::publish>(d, &Derived::publish_data),
+      lift<atom::publish>(d, &Derived::publish_command),
+      lift<atom::subscribe>(d, &Derived::subscribe),
+      lift<atom::publish>(d, &Derived::handle_publication),
+      lift<atom::subscribe>(d, &Derived::handle_subscription),
+      [=](atom::get, atom::id) { return dref().id(); },
+    };
   }
 
 private:

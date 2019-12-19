@@ -4,6 +4,7 @@
 
 #include <caf/broadcast_downstream_manager.hpp>
 #include <caf/cow_tuple.hpp>
+#include <caf/detail/scope_guard.hpp>
 #include <caf/detail/unordered_flat_map.hpp>
 #include <caf/fused_downstream_manager.hpp>
 
@@ -17,6 +18,21 @@
 
 namespace broker::alm {
 
+/// The transport registers these message handlers:
+///
+/// ~~~
+/// (atom::peer, peer_id_type, actor)
+/// -> void start_peering(...)
+///
+/// (atom::peer, actor, peer_id_type, filter_type, uint64_t)
+/// -> outbound_stream_slot<...> handle_peering_request(...)
+///
+/// (stream<node_message>, actor, peer_id_type, filter_type, uint64_t)
+/// -> outbound_stream_slot<...> handle_peering_handshake_1(...)
+///
+/// (stream<node_message>, actor, peer_id_type)
+/// -> void handle_peering_handshake_2(...)
+/// ~~~
 template <class Derived, class PeerId>
 class stream_transport : public peer<Derived, PeerId, caf::actor>,
                          public caf::stream_manager {
@@ -176,10 +192,10 @@ public:
   // -- peering ----------------------------------------------------------------
 
   // Initiates peering between A (this node) and B (remote peer).
-  void start_peering(const peer_id_type& remote_peer, const caf::actor& hdl) {
+  void start_peering(const peer_id_type& remote_peer, const caf::actor& hdl,
+                     caf::response_promise rp) {
     BROKER_TRACE(BROKER_ARG(remote_peer) << BROKER_ARG(hdl));
     auto& d = dref();
-    auto rp = self()->make_response_promise();
     // We avoid conflicts in the handshake process by always having the node
     // with the smaller ID initiate the peering. Otherwise, we could end up in a
     // deadlock during handshake if both sides send step 1 at the sime time.
@@ -382,32 +398,83 @@ public:
 
   void handle(caf::inbound_path* path, caf::downstream_msg::close& x) override {
     BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(x));
-    if (path->hdl == nullptr) {
-      BROKER_ERROR("closed inbound path with invalid communication handle");
-    } else {
-      auto hdl = caf::actor_cast<caf::actor>(path->hdl);
-      error dummy;
-      inbound_path_disconnect(hdl, dummy);
-    }
-    caf::stream_manager::handle(path, x);
+    handle_impl(path, x);
   }
 
   void handle(caf::inbound_path* path,
               caf::downstream_msg::forced_close& x) override {
     BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(x));
-    if (path->hdl == nullptr) {
-      BROKER_ERROR("closed inbound path with invalid communication handle");
-    } else {
-      auto hdl = caf::actor_cast<caf::actor>(path->hdl);
-      error dummy;
-      inbound_path_disconnect(hdl, dummy);
+    handle_impl(path, x);
+  }
+
+  void handle(caf::stream_slots slots, caf::upstream_msg::drop& x) override {
+    BROKER_TRACE(BROKER_ARG(slots) << BROKER_ARG(x));
+    handle_impl(slots, x);
+  }
+
+  void handle(caf::stream_slots slots,
+              caf::upstream_msg::forced_drop& x) override {
+    BROKER_TRACE(BROKER_ARG(slots) << BROKER_ARG(x));
+    handle_impl(slots, x);
+  }
+
+  bool handle(caf::stream_slots slots,
+              caf::upstream_msg::ack_open& x) override {
+    CAF_LOG_TRACE(CAF_ARG(slots) << CAF_ARG(x));
+    using caf::detail::make_scope_guard;
+    auto rebind_from = caf::actor_cast<caf::actor>(x.rebind_from);
+    auto rebind_to = caf::actor_cast<caf::actor>(x.rebind_to);
+    bool abort_connection = false;
+    if (rebind_from != rebind_to) {
+      auto update_map = [&](auto& map) {
+        auto i = map.find(rebind_from);
+        if (i == map.end()) {
+          BROKER_WARNING("received an ack_open from an unknown peer");
+          return false;
+        }
+        auto slot = i->second;
+        map.erase(i);
+        if (!map.emplace(rebind_to, slot).second) {
+          BROKER_ERROR("rebinding to an already existing entry!");
+          return false;
+        }
+        return true;
+      };
+      auto update_tbl = [&] {
+        auto predicate = [&](const auto& kvp) {
+          return kvp.second.hdl == rebind_from;
+        };
+        auto e = dref().tbl().end();
+        auto i = std::find_if(dref().tbl().begin(), e, predicate);
+        if (i == e) {
+          BROKER_WARNING("received an ack_open but no table entry exists");
+          return false;
+        }
+        i->second.hdl = rebind_to;
+        return true;
+      };
+      if (!update_map(hdl_to_istream_)) {
+        abort_connection = true;
+      } else if (!update_map(hdl_to_ostream_)) {
+        hdl_to_istream_.erase(rebind_to);
+        abort_connection = true;
+      } else if (!update_tbl()) {
+        hdl_to_istream_.erase(rebind_to);
+        hdl_to_ostream_.erase(rebind_to);
+        abort_connection = true;
+      }
     }
-    caf::stream_manager::handle(path, x);
+    if (abort_connection || !caf::stream_manager::handle(slots, x)) {
+      error reason = ec::peer_disconnect_during_handshake;
+      disconnect(rebind_from, reason, x);
+      return false;
+    }
+    return true;
   }
 
   bool done() const override {
-    return !continuous() && pending_handshakes_ == 0
-           && inbound_paths_.empty() && out_.clean();
+    return !continuous() && pending_handshakes_ == 0 && inbound_paths_.empty()
+           && out_.clean();
   }
 
   bool idle() const noexcept override {
@@ -423,38 +490,44 @@ public:
   caf::behavior make_behavior(Fs... fs) {
     using detail::lift;
     auto& d = dref();
-    return {
+    return super::make_behavior(
       std::move(fs)...,
+      [=](atom::peer, const peer_id_type& remote_peer, const caf::actor& hdl) {
+        dref().start_peering(remote_peer, hdl, self()->make_response_promise());
+      },
       lift<atom::peer>(d, &Derived::start_peering),
       lift<atom::peer>(d, &Derived::handle_peering_request),
       lift<>(d, &Derived::handle_peering_handshake_1),
-      lift<>(d, &Derived::handle_peering_handshake_2),
-      lift<atom::publish>(d, &Derived::publish_data),
-      lift<atom::publish>(d, &Derived::publish_command),
-      lift<atom::subscribe>(d, &Derived::subscribe),
-      lift<atom::publish>(d, &Derived::handle_publication),
-      lift<atom::subscribe>(d, &Derived::handle_subscription),
-    };
+      lift<>(d, &Derived::handle_peering_handshake_2));
   }
 
 protected:
-  void inbound_path_disconnect(const caf::actor& hdl, const error& err) {
-    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(err));
+  template <class Cause>
+  void disconnect(const caf::actor& hdl, const error& reason, const Cause&) {
+    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(reason));
+    static constexpr bool is_inbound
+      = std::is_same<typename Cause::outer_type, caf::downstream_msg>::value;
+    hdl_to_slot_map* channel;
+    if constexpr (is_inbound)
+      channel = &hdl_to_istream_;
+    else
+      channel = &hdl_to_ostream_;
     // Remove state associating the handle to a stream slot. If this fails,
     // check whether we lost the peer during the handshake.
-    if (hdl_to_istream_.erase(hdl) == 0) {
+    if (channel->erase(hdl) == 0) {
       auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
       auto e = pending_connections_.end();
       auto i = std::find_if(pending_connections_.begin(), e, predicate);
       if (i == e) {
-        // Not an error. Usually means that we've received an upstream_msg::drop
-        // message earlier that cleared all the state already.
+        // Not an error. Usually means that we've received an
+        // upstream_msg::drop message earlier that cleared all the state
+        // already.
         BROKER_DEBUG("closed inbound path to unknown peer");
         return;
       }
-      error reason = ec::peer_disconnect_during_handshake;
+      error err = ec::peer_disconnect_during_handshake;
       for (auto& promise : i->second.promises)
-        promise.deliver(reason);
+        promise.deliver(err);
       pending_connections_.erase(i);
       return;
     }
@@ -462,19 +535,63 @@ protected:
     auto& d = dref();
     if (auto remote_id = get_peer_id(d.tbl(), hdl)) {
       // peer::peer_disconnected ultimately removes the entry from the table.
-      error reason;
       d.peer_disconnected(*remote_id, hdl, reason);
     } else {
       BROKER_ERROR("closed inbound path to a peer without routing table entry");
     }
-    // Close the associated outbound path.
-    auto i = hdl_to_ostream_.find(hdl);
-    if (i == hdl_to_ostream_.end()){
-      BROKER_WARNING("closed inbound path to a peer that had no outbound path");
-      return;
+    if constexpr (is_inbound) {
+      // Close the associated outbound path.
+      auto i = hdl_to_ostream_.find(hdl);
+      if (i == hdl_to_ostream_.end()){
+        BROKER_WARNING("closed inbound path to a peer that had no outbound path");
+        return;
+      }
+      out_.close(i->second);
+      hdl_to_ostream_.erase(i);
+    } else {
+      // Close the associated inbound path.
+      auto i = hdl_to_istream_.find(hdl);
+      if (i == hdl_to_istream_.end()) {
+        BROKER_WARNING(
+          "closed inbound path to a peer that had no outbound path");
+        return;
+      }
+      remove_input_path(i->second, reason, false);
+      hdl_to_istream_.erase(i);
     }
-    out_.close(i->second);
-    hdl_to_ostream_.erase(i);
+  }
+
+  template <class Cause>
+  void handle_impl(caf::inbound_path* path, Cause& cause) {
+    if (path->hdl == nullptr) {
+      BROKER_ERROR("closed inbound path with invalid communication handle");
+    } else {
+      auto hdl = caf::actor_cast<caf::actor>(path->hdl);
+      if constexpr (std::is_same<caf::downstream_msg::close, Cause>::value) {
+        error dummy;
+        disconnect(hdl, dummy, cause);
+      } else {
+        disconnect(hdl, cause.reason, cause);
+      }
+    }
+    caf::stream_manager::handle(path, cause);
+  }
+
+  template <class Cause>
+  void handle_impl(caf::stream_slots slots, Cause& cause) {
+    auto path = out_.path(slots.receiver);
+    if (!path || path->hdl == nullptr) {
+      BROKER_ERROR("closed outbound path with invalid communication handle");
+    } else {
+      auto hdl = caf::actor_cast<caf::actor>(path->hdl);
+      if constexpr (std::is_same<caf::upstream_msg::drop, Cause>::value) {
+        error dummy;
+        disconnect(hdl, dummy, cause);
+      } else {
+        disconnect(hdl, cause.reason, cause);
+      }
+    }
+    caf::stream_manager::handle(slots, cause);
   }
 
   /// Organizes downstream communication to peers as well as local subscribers.

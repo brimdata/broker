@@ -27,7 +27,7 @@ class network_cache {
 public:
   network_cache(caf::event_based_actor* selfptr);
 
-  void set_use_ssl(bool use_ssl_) { use_ssl = use_ssl_; }
+  void set_use_ssl(bool use_ssl);
 
   /// Either returns an actor handle immediately if the entry is cached or
   /// queries the middleman actor and responds later via response promise.
@@ -41,31 +41,22 @@ public:
       f(*y);
       return;
     }
-    BROKER_INFO("initiating connection to"
-                << (x.address + ":" + std::to_string(x.port))
-                << (use_ssl ? "(SSL)" : "(no SSL)"));
-    auto hdl = (use_ssl ? self->home_system().openssl_manager().actor_handle()
-                        : self->home_system().middleman().actor_handle());
-    self->request(hdl, infinite,
-                  connect_atom::value, x.address, x.port)
-    .then(
-      [=](const node_id&, strong_actor_ptr& res,
-          std::set<std::string>& ifs) mutable {
-        if (!ifs.empty())
-          g(sec::unexpected_actor_messaging_interface);
-        else if (res == nullptr)
-          g(sec::no_actor_published_at_port);
-        else {
-          auto hdl = actor_cast<actor>(std::move(res));
-          hdls_.emplace(x, hdl);
-          addrs_.emplace(hdl, x);
-          f(std::move(hdl));
-        }
-      },
-      [=](error& err) mutable {
-        g(std::move(err));
-      }
-    );
+    self->request(mm_, infinite, connect_atom::value, x.address, x.port)
+      .then(
+        [=](const node_id&, strong_actor_ptr& res,
+            std::set<std::string>& ifs) mutable {
+          if (!ifs.empty())
+            g(sec::unexpected_actor_messaging_interface);
+          else if (res == nullptr)
+            g(sec::no_actor_published_at_port);
+          else {
+            auto hdl = actor_cast<actor>(std::move(res));
+            hdls_.emplace(x, hdl);
+            addrs_.emplace(hdl, x);
+            f(std::move(hdl));
+          }
+        },
+        [=](error& err) mutable { g(std::move(err)); });
   }
 
   template <class OnResult, class OnError>
@@ -76,23 +67,15 @@ public:
       f(*y);
       return;
     }
-    BROKER_INFO("retrieving connection for"
-                << x << (use_ssl ? "(SSL)" : "(no SSL)"));
-    auto hdl = (use_ssl ? self->home_system().openssl_manager().actor_handle()
-                        : self->home_system().middleman().actor_handle());
-    self->request(hdl, infinite,
-                  get_atom::value, x.node())
-    .then(
-      [=](const node_id&, std::string& address, uint16_t port) mutable {
-        network_info result{std::move(address), port};
-        hdls_.emplace(result, x);
-        addrs_.emplace(x, result);
-        f(std::move(result));
-      },
-      [=](error& err) mutable {
-        g(std::move(err));
-      }
-    );
+    self->request(mm_, infinite, get_atom::value, x.node())
+      .then(
+        [=](const node_id&, std::string& address, uint16_t port) mutable {
+          network_info result{std::move(address), port};
+          hdls_.emplace(result, x);
+          addrs_.emplace(x, result);
+          f(std::move(result));
+        },
+        [=](error& err) mutable { g(std::move(err)); });
   }
 
   /// Returns the handle associated to `x`, if any.
@@ -110,15 +93,25 @@ public:
   /// Removes mapping for `x` and the corresponding actor handle.
   void remove(const network_info& x);
 
-private:
-  // Parent.
-  caf::event_based_actor* self;
-  bool use_ssl = true;
+  /// @cond PRIVATE
 
-  // Maps remote actor handles to network addresses.
+  void mm(caf::actor hdl) {
+    mm_ = hdl;
+  }
+
+  /// @endcond
+
+private:
+  /// Points to the parent.
+  caf::event_based_actor* self;
+
+  /// Type-erased reference to the I/O or OpenSSL middleman actor.
+  caf::actor mm_;
+
+  /// Maps remote actor handles to network addresses.
   std::unordered_map<caf::actor, network_info> addrs_;
 
-  // Maps network addresses to remote actor handles.
+  /// Maps network addresses to remote actor handles.
   std::unordered_map<network_info, caf::actor> hdls_;
 };
 

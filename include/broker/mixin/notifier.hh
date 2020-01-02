@@ -9,7 +9,7 @@
 #include "broker/logger.hh"
 #include "broker/status.hh"
 
-namespace broker::detail {
+namespace broker::mixin {
 
 template <class Base, class Subtype>
 class notifier : public Base {
@@ -89,4 +89,4 @@ private:
   caf::group statuses_;
 };
 
-} // namespace broker::detail
+} // namespace broker::mixin

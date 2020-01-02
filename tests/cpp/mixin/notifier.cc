@@ -1,6 +1,6 @@
-#define SUITE detail.notifier
+#define SUITE mixin.notifier
 
-#include "broker/detail/notifier.hh"
+#include "broker/mixin/notifier.hh"
 
 #include "test.hh"
 
@@ -32,7 +32,7 @@ class stream_peer_manager
   : public //
     caf::extend<stream_transport<stream_peer_manager, peer_id>,
                 stream_peer_manager>:: //
-    with<detail::notifier> {
+    with<mixin::notifier> {
 public:
   using super = extended_base;
 

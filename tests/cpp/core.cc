@@ -111,6 +111,7 @@ public:
   config() {
     configuration::add_message_types(*this);
     add_message_type<element_type>("element");
+    load<caf::io::middleman>();
   }
 };
 

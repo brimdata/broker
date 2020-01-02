@@ -104,8 +104,6 @@ struct core_state {
 
   template <sc StatusCode>
   void emit_status(caf::actor hdl, const char* msg) {
-    static_assert(StatusCode != sc::peer_added,
-                  "Use emit_peer_added_status instead");
     auto emit = [=](network_info x) {
       BROKER_INFO("status" << StatusCode << x);
       self->send(statuses_, atom::local::value,
@@ -120,14 +118,10 @@ struct core_state {
       emit({});
   }
 
-  void emit_peer_added_status(caf::actor hdl, const char* msg);
-
   template <sc StatusCode>
   void emit_status(caf::strong_actor_ptr hdl, const char* msg) {
     emit_status<StatusCode>(caf::actor_cast<caf::actor>(std::move(hdl)), msg);
   }
-
-  void sync_with_status_subscribers(caf::actor new_peer);
 
   // --- member variables ------------------------------------------------------
 

@@ -10,7 +10,7 @@
 
 CAF_ALLOW_UNSAFE_MESSAGE_TYPE(caf::response_promise)
 
-namespace broker::detail {
+namespace broker::mixin {
 
 /// Adds these handlers:
 /// (atom::peer, network_info)
@@ -60,6 +60,7 @@ public:
 
   template <class... Fs>
   caf::behavior make_behavior(Fs... fs) {
+    using detail::lift;
     auto& d = dref();
     return super::make_behavior(
       std::move(fs)...,
@@ -82,7 +83,7 @@ private:
   }
 
   /// Associates network addresses to remote actor handles and vice versa.
-  network_cache cache_;
+  detail::network_cache cache_;
 };
 
-} // namespace broker::detail
+} // namespace broker::mixin

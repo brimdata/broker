@@ -1,6 +1,6 @@
-#define SUITE detail.connector
+#define SUITE mixin.connector
 
-#include "broker/detail/connector.hh"
+#include "broker/mixin/connector.hh"
 
 #include "test.hh"
 
@@ -65,7 +65,7 @@ caf::behavior dummy_mm(caf::stateful_actor<dummy_mm_state>* self, size_t n,
 }
 
 struct aut_state
-: caf::extend<connector_mock_base, aut_state>::with<detail::connector> {
+  : caf::extend<connector_mock_base, aut_state>::with<mixin::connector> {
   using super = extended_base;
 
   aut_state(caf::event_based_actor* self) : super(self) {

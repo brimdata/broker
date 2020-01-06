@@ -120,7 +120,7 @@ struct stream_peer_actor {
   using type = stream_peer_actor_type;
 
   caf::behavior operator()(type* self, peer_id id) const {
-    auto& mgr= self->state.mgr;
+    auto& mgr = self->state.mgr;
     mgr = caf::make_counted<stream_peer_manager>(self);
     mgr->id(std::move(id));
     return mgr->make_behavior();

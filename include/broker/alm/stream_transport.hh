@@ -149,6 +149,30 @@ public:
     return out_.template get<typename store_trait::manager>();
   }
 
+  // -- adding local subscribers -----------------------------------------------
+
+  caf::error add_worker(const caf::actor& hdl, const filter_type& filter) {
+    using element_type = typename worker_trait::element;
+    auto slot = add_unchecked_outbound_path<element_type>(hdl);
+    if (slot == caf::invalid_stream_slot)
+      return caf::sec::cannot_add_downstream;
+    dref().subscribe(filter);
+    out_.template assign<typename worker_trait::manager>(slot);
+    worker_manager().set_filter(slot, filter);
+    return caf::none;
+  }
+
+  caf::error add_store(const caf::actor& hdl, const filter_type& filter) {
+    using element_type = typename store_trait::element;
+    auto slot = add_unchecked_outbound_path<element_type>(hdl);
+    if (slot == caf::invalid_stream_slot)
+      return caf::sec::cannot_add_downstream;
+    dref().subscribe(filter);
+    out_.template assign<typename store_trait::manager>(slot);
+    store_manager().set_filter(slot, filter);
+    return caf::none;
+  }
+
   // -- sending ----------------------------------------------------------------
 
   void stream_send(const caf::actor& receiver, message_type& msg) {

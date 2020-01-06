@@ -93,6 +93,13 @@ public:
     return timestamp_;
   }
 
+  auto peer_handles() const noexcept {
+    std::vector<caf::actor> result;
+    for (auto& kvp : tbl_)
+      result.emplace_back(kvp.second.hdl);
+    return result;
+  }
+
   // -- convenience functions for routing information --------------------------
 
   optional<size_t> distance_to(const peer_id_type& remote_peer) {

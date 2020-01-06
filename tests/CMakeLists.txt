@@ -19,6 +19,7 @@ set(tests
   cpp/integration.cc
   cpp/master.cc
   cpp/mixin/connector.cc
+  cpp/mixin/data_store_manager.cc
   cpp/mixin/notifier.cc
   cpp/publisher.cc
   cpp/radix_tree.cc

@@ -591,6 +591,9 @@ public:
       [this](atom::publish, atom::local, data_message msg) {
         worker_manager().push(msg);
       },
+      [this](atom::unpeer, const caf::actor& hdl) {
+        dref().unpeer(hdl);
+      },
       [this](atom::unpeer, const peer_id_type& peer_id) {
         dref().unpeer(peer_id);
       });

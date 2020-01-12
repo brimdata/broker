@@ -45,18 +45,20 @@ public:
       .then(
         [=](const node_id&, strong_actor_ptr& res,
             std::set<std::string>& ifs) mutable {
-          if (!ifs.empty())
-            g(sec::unexpected_actor_messaging_interface);
-          else if (res == nullptr)
-            g(sec::no_actor_published_at_port);
-          else {
+          if (!ifs.empty()) {
+            error err{sec::unexpected_actor_messaging_interface};
+            g(err);
+          } else if (res == nullptr) {
+            error err{sec::no_actor_published_at_port};
+            g(err);
+          } else {
             auto hdl = actor_cast<actor>(std::move(res));
             hdls_.emplace(x, hdl);
             addrs_.emplace(hdl, x);
             f(std::move(hdl));
           }
         },
-        [=](error& err) mutable { g(std::move(err)); });
+        [=](error& err) mutable { g(err); });
   }
 
   template <class OnResult, class OnError>

@@ -1,9 +1,11 @@
 #pragma once
 
+#include <caf/behavior.hpp>
 #include <caf/group.hpp>
 
 #include "broker/atoms.hh"
 #include "broker/detail/assert.hh"
+#include "broker/detail/lift.hh"
 #include "broker/endpoint_info.hh"
 #include "broker/error.hh"
 #include "broker/logger.hh"
@@ -14,9 +16,9 @@ namespace broker::mixin {
 template <class Base, class Subtype>
 class notifier : public Base {
 public:
-  using extended_base = notifier;
-
   using super = Base;
+
+  using extended_base = notifier;
 
   using peer_id_type = typename super::peer_id_type;
 
@@ -42,6 +44,19 @@ public:
     super::peer_disconnected(remote_id, hdl, reason);
   }
 
+  void disable_notifications() {
+    errors_ = caf::group{};
+    statuses_ = caf::group{};
+  }
+
+  template <class... Fs>
+  caf::behavior make_behavior(Fs... fs) {
+    using detail::lift;
+    auto& d = dref();
+    return super::make_behavior(
+      fs..., lift<atom::no_events>(d, &Subtype::disable_notifications));
+  }
+
 private:
   auto& dref() {
     return *static_cast<Subtype*>(this);
@@ -65,7 +80,7 @@ private:
     if (self->node() != hdl.node()) {
       auto on_cache_hit = [=](network_info x) { emit(std::move(x)); };
       auto on_cache_miss = [=](caf::error) { emit({}); };
-      dref().cache.fetch(hdl, on_cache_hit, on_cache_miss);
+      dref().cache().fetch(hdl, on_cache_hit, on_cache_miss);
     } else {
       emit({});
     }

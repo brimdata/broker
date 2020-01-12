@@ -48,10 +48,13 @@ public:
     id_ = std::move(new_id);
   }
 
-  dummy_cache cache;
+  auto& cache() noexcept {
+    return cache_;
+  }
 
 private:
   peer_id id_;
+  dummy_cache cache_;
 };
 
 struct stream_peer_actor_state {

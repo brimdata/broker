@@ -6,6 +6,7 @@
 #include <caf/cow_tuple.hpp>
 #include <caf/detail/scope_guard.hpp>
 #include <caf/detail/unordered_flat_map.hpp>
+#include <caf/event_based_actor.hpp>
 #include <caf/fused_downstream_manager.hpp>
 
 #include "broker/alm/peer.hh"
@@ -151,6 +152,20 @@ public:
 
   // -- adding local subscribers -----------------------------------------------
 
+  /// Subscribes `self->current_sender()` to `worker_manager()`.
+  auto add_sending_worker(const filter_type& filter) {
+    using element_type = typename worker_trait::element;
+    using result_type = caf::outbound_stream_slot<element_type>;
+    auto slot = add_unchecked_outbound_path<element_type>();
+    if (slot != caf::invalid_stream_slot) {
+      dref().subscribe(filter);
+      out_.template assign<typename worker_trait::manager>(slot);
+      worker_manager().set_filter(slot, filter);
+    }
+    return result_type{slot};
+  }
+
+  /// Subscribes `hdl` to `worker_manager()`.
   caf::error add_worker(const caf::actor& hdl, const filter_type& filter) {
     using element_type = typename worker_trait::element;
     auto slot = add_unchecked_outbound_path<element_type>(hdl);
@@ -162,6 +177,20 @@ public:
     return caf::none;
   }
 
+  /// Subscribes `self->sender()` to `store_manager()`.
+  auto add_sending_store(const caf::actor& hdl, const filter_type& filter) {
+    using element_type = typename store_trait::element;
+    using result_type = caf::outbound_stream_slot<element_type>;
+    auto slot = add_unchecked_outbound_path<element_type>();
+    if (slot != caf::invalid_stream_slot) {
+      dref().subscribe(filter);
+      out_.template assign<typename store_trait::manager>(slot);
+      store_manager().set_filter(slot, filter);
+    }
+    return result_type{slot};
+  }
+
+  /// Subscribes `hdl` to `store_manager()`.
   caf::error add_store(const caf::actor& hdl, const filter_type& filter) {
     using element_type = typename store_trait::element;
     auto slot = add_unchecked_outbound_path<element_type>(hdl);
@@ -251,20 +280,17 @@ public:
       i->second.promises.emplace_back(self()->make_response_promise());
       return;
     }
-    auto&pending=pending_connections_[remote_peer];
+    auto& pending = pending_connections_[remote_peer];
     pending.hdl = hdl;
     pending.promises.emplace_back(std::move(rp));
-    self()->send(hdl, atom::peer::value, self(), d.id(), d.subscriptions(),
-                 d.timestamp());
+    self()->send(hdl, atom::peer::value, self(), d.id());
   }
 
   // Establishes a stream from B to A.
   caf::outbound_stream_slot<message_type, caf::actor, peer_id_type, filter_type,
                             uint64_t>
-  handle_peering_request(const caf::actor& hdl, const peer_id_type& remote_id,
-                         const filter_type& topics, uint64_t timestamp) {
-    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(remote_id) << BROKER_ARG(topics)
-                                 << BROKER_ARG(timestamp));
+  handle_peering_request(const caf::actor& hdl, const peer_id_type& remote_id) {
+    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(remote_id));
     auto& d = dref();
     // Sanity checking.
     if (!hdl) {
@@ -283,7 +309,7 @@ public:
     // Open output stream (triggers handle_peering_handshake_1 on the remote),
     // sending our subscriptions, timestamp, etc. as handshake data.
     auto data = std::make_tuple(caf::actor_cast<caf::actor>(self()), d.id(),
-                              d.subscriptions(), d.timestamp());
+                                d.subscriptions(), d.timestamp());
     auto slot = d.template add_unchecked_outbound_path<message_type>(
       hdl, std::move(data));
     out_.template assign<typename peer_trait::manager>(slot);
@@ -292,7 +318,8 @@ public:
   }
 
   // Acks the stream from B to A and establishes a stream from A to B.
-  caf::outbound_stream_slot<message_type, caf::actor, peer_id_type>
+  caf::outbound_stream_slot<message_type, atom::ok, caf::actor, peer_id_type,
+                            filter_type, uint64_t>
   handle_peering_handshake_1(caf::stream<message_type> in,
                              const caf::actor& hdl,
                              const peer_id_type& remote_id,
@@ -317,8 +344,13 @@ public:
                    << remote_id);
       return {};
     }
+    // Store subscriptions and announce the new path.
+    std::vector<peer_id_type> path{remote_id};
+    d.handle_subscription(path, topics, timestamp);
     // Add streaming slots for this connection.
-    auto data = std::make_tuple(caf::actor_cast<caf::actor>(self()), d.id());
+    auto data = std::make_tuple(atom::ok::value,
+                                caf::actor_cast<caf::actor>(self()), d.id(),
+                                d.subscriptions(), d.timestamp());
     auto oslot = d.template add_unchecked_outbound_path<message_type>(
       hdl, std::move(data));
     out_.template assign<typename peer_trait::manager>(oslot);
@@ -330,9 +362,11 @@ public:
   }
 
   // Acks the stream from A to B.
-  void handle_peering_handshake_2(caf::stream<message_type> in,
+  void handle_peering_handshake_2(caf::stream<message_type> in, atom::ok,
                                   const caf::actor& hdl,
-                                  const peer_id_type& remote_id) {
+                                  const peer_id_type& remote_id,
+                                  const filter_type& topics,
+                                  uint64_t timestamp) {
     BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(remote_id));
     auto& d = dref();
     // Sanity checking. At this stage, we must have an open output stream but no
@@ -359,6 +393,9 @@ public:
     d.peer_connected(remote_id, hdl);
     // Add inbound streaming slot for this connection.
     hdl_to_istream_[hdl] = d.add_unchecked_inbound_path(in);
+    // Store subscriptions and announce the new path.
+    std::vector<peer_id_type> path{remote_id};
+    d.handle_subscription(path, topics, timestamp);
   }
 
   // -- callbacks --------------------------------------------------------------
@@ -515,14 +552,37 @@ public:
     using detail::lift;
     auto& d = dref();
     return super::make_behavior(
+      // Forward additional message handlers.
       std::move(fs)...,
-      [=](atom::peer, const peer_id_type& remote_peer, const caf::actor& hdl) {
-        dref().start_peering(remote_peer, hdl, self()->make_response_promise());
-      },
+      // Expose to member functions to messaging API.
       lift<atom::peer>(d, &Derived::start_peering),
       lift<atom::peer>(d, &Derived::handle_peering_request),
       lift<>(d, &Derived::handle_peering_handshake_1),
-      lift<>(d, &Derived::handle_peering_handshake_2));
+      lift<>(d, &Derived::handle_peering_handshake_2),
+      lift<atom::join>(d, &Derived::add_sending_worker),
+      lift<atom::join, atom::store>(d, &Derived::add_sending_store),
+      // Trigger peering to remotes.
+      [=](atom::peer, const peer_id_type& remote_peer, const caf::actor& hdl) {
+        dref().start_peering(remote_peer, hdl, self()->make_response_promise());
+      },
+      // Per-stream subscription updates.
+      [=](atom::join, atom::update, caf::stream_slot slot,
+          filter_type& filter) {
+        dref().subscribe(filter);
+        worker_manager().set_filter(slot, filter);
+      },
+      [=](atom::join, atom::update, caf::stream_slot slot, filter_type& filter,
+          const caf::actor& listener) {
+        dref().subscribe(filter);
+        worker_manager().set_filter(slot, filter);
+        self()->send(listener, true);
+      },
+      // Allow local publishers to hoook directly into the stream.
+      [=](caf::stream<data_message> in) { add_unchecked_inbound_path(in); },
+      // Special handlers for bypassing streams and/or forwarding.
+      [=](atom::publish, atom::local, data_message msg) {
+        worker_manager().push(msg);
+      });
   }
 
 protected:
@@ -566,8 +626,9 @@ protected:
     if constexpr (is_inbound) {
       // Close the associated outbound path.
       auto i = hdl_to_ostream_.find(hdl);
-      if (i == hdl_to_ostream_.end()){
-        BROKER_WARNING("closed inbound path to a peer that had no outbound path");
+      if (i == hdl_to_ostream_.end()) {
+        BROKER_WARNING(
+          "closed inbound path to a peer that had no outbound path");
         return;
       }
       out_.close(i->second);

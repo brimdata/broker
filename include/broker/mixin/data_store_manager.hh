@@ -132,11 +132,13 @@ public:
   /// corresponding actors.
   void detach_stores() {
     auto self = super::self();
-    for (auto& container : {masters_, clones_}) {
+    auto f = [&](auto& container) {
       for (auto& kvp : container)
         self->send_exit(kvp.second, caf::exit_reason::user_shutdown);
       container.clear();
-    }
+    };
+    f(masters_);
+    f(clones_);
   }
 
   // -- factories --------------------------------------------------------------

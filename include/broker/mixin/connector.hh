@@ -7,13 +7,21 @@
 #include "broker/detail/lift.hh"
 #include "broker/detail/network_cache.hh"
 #include "broker/error.hh"
+#include "broker/message.hh"
 
 CAF_ALLOW_UNSAFE_MESSAGE_TYPE(caf::response_promise)
 
 namespace broker::mixin {
 
 /// Adds these handlers:
-/// (atom::peer, network_info)
+///
+/// ~~~
+/// (atom::peer, network_info addr) -> void
+/// => try_peering(addr, self->make_response_promise(), 0)
+///
+/// (atom::publish, network_info addr, data_message msg) -> void
+/// => try_publish(addr, msg, self->make_response_promise())
+/// ~~~
 template <class Base, class Subtype>
 class connector : public Base {
 public:
@@ -34,12 +42,15 @@ public:
   void try_peering(const network_info& addr, caf::response_promise rp,
                    uint32_t count) {
     auto self = super::self();
-    auto deliver_err = [=](error& err) mutable { rp.deliver(std::move(err)); };
     // Fetch the comm. handle from the cache and with that fetch the ID from the
     // remote peer via direct request messages.
     cache_.fetch(
       addr,
       [=](communication_handle_type hdl) {
+        if (auto i = ids_.find(hdl); i != ids_.end()) {
+          dref().start_peering(i->second, hdl, std::move(rp));
+          return;
+        }
         // TODO: replace infinite with some useful default / config parameter
         self->request(hdl, caf::infinite, atom::get::value, atom::id::value)
           .then(
@@ -58,6 +69,31 @@ public:
       });
   }
 
+  void try_publish(const network_info& addr, data_message& msg,
+                   caf::response_promise rp) {
+    auto self = super::self();
+    auto deliver_err = [=](error& err) mutable { rp.deliver(std::move(err)); };
+    cache_.fetch(
+      addr,
+      [=, msg{std::move(msg)}](communication_handle_type hdl) mutable {
+        if (auto i = ids_.find(hdl); i != ids_.end()) {
+          dref().ship(msg, i->second);
+          rp.deliver(caf::unit);
+          return;
+        }
+        // TODO: replace infinite with some useful default / config parameter
+        self->request(hdl, caf::infinite, atom::get::value, atom::id::value)
+          .then(
+            [=, msg{std::move(msg)}](const peer_id_type& remote_id) mutable {
+              ids_.emplace(hdl, remote_id);
+              dref().ship(msg, remote_id);
+              rp.deliver(caf::unit);
+            },
+            deliver_err);
+      },
+      deliver_err);
+  }
+
   template <class... Fs>
   caf::behavior make_behavior(Fs... fs) {
     using detail::lift;
@@ -70,6 +106,9 @@ public:
       [=](atom::peer, atom::retry, const network_info& addr,
           caf::response_promise& rp,
           uint32_t count) { dref().try_peering(addr, std::move(rp), count); },
+      [=](atom::publish, const network_info& addr, data_message& msg) {
+        dref().try_publish(addr, msg, super::self()->make_response_promise());
+      },
       lift<atom::peer>(d, &Subtype::try_peering));
   }
 
@@ -84,6 +123,9 @@ private:
 
   /// Associates network addresses to remote actor handles and vice versa.
   detail::network_cache cache_;
+
+  /// Maps remote actor handles to peer IDs.
+  std::unordered_map<caf::actor, peer_id_type> ids_;
 };
 
 } // namespace broker::mixin

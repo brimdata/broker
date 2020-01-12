@@ -7,6 +7,7 @@
 
 #include "broker/alm/routing_table.hh"
 #include "broker/atoms.hh"
+#include "broker/detail/assert.hh"
 #include "broker/detail/lift.hh"
 #include "broker/error.hh"
 #include "broker/filter_type.hh"
@@ -36,23 +37,23 @@ namespace broker::alm {
 /// The peer registers these message handlers:
 ///
 /// ~~~
-/// (atom::get, atom::id)
-/// -> peer_id_type id()
+/// (atom::get, atom::id) -> peer_id_type
+/// => id()
 ///
-/// (atom::publish, data_message)
-/// -> void publish_data(...)
+/// (atom::publish, data_message msg) -> void
+/// => publish_data(msg)
 ///
-/// (atom::publish, command_message)
-/// -> void publish_command(...)
+/// (atom::publish, command_message msg) -> void
+/// => publish_command(msg)
 ///
-/// (atom::subscribe, filter_type)
-/// -> void subscribe(...)
+/// (atom::subscribe, filter_type filter) -> void
+/// => subscribe(filter)
 ///
-/// (atom::publish, node_message)
-/// -> void handle_publication(...)
+/// (atom::publish, node_message msg) -> void
+/// => handle_publication(msg)
 ///
-/// (atom::subscribe, vector<peer_id_type>, vector<topic>, uint64_t)
-/// -> void handle_subscription(...)
+/// (atom::subscribe, peer_id_list path, filter_type filter, uint64_t t) -> void
+/// => handle_subscription(path, filter, t)
 /// ~~~
 template <class Derived, class PeerId, class CommunicationHandle>
 class peer {
@@ -62,6 +63,8 @@ public:
   using routing_table_type = routing_table<PeerId, CommunicationHandle>;
 
   using peer_id_type = PeerId;
+
+  using peer_id_list = std::vector<peer_id_type>;
 
   using communication_handle_type = CommunicationHandle;
 
@@ -83,6 +86,15 @@ public:
 
   const auto& peer_subscriptions() const noexcept {
     return peer_subscriptions_;
+  }
+
+  auto peer_subscriptions(const peer_id_type& x) const {
+    auto predicate = [&](const auto& y) { return x == y; };
+    filter_type result;
+    for (const auto& kvp : peer_subscriptions_)
+      if (std::any_of(kvp.second.begin(), kvp.second.end(), predicate))
+        result.emplace_back(kvp.first);
+    return result;
   }
 
   auto ttl() const noexcept {
@@ -131,7 +143,7 @@ public:
       return;
     }
     ++timestamp_;
-    std::vector<peer_id_type> path{dref().id()};
+    peer_id_list path{dref().id()};
     for (auto& kvp : tbl_)
       dref().send(kvp.second.hdl, atom::subscribe::value, path, subscriptions_,
                   timestamp_);
@@ -140,13 +152,12 @@ public:
   template <class T>
   void publish(const T& content) {
     auto& topic = get_topic(content);
-    std::vector<peer_id_type> receivers;
+    peer_id_list receivers;
     for (auto& kvp : peer_subscriptions_)
       if (kvp.first.prefix_of(topic))
         receivers.insert(receivers.end(), kvp.second.begin(), kvp.second.end());
     if (receivers.empty()) {
       BROKER_DEBUG("no subscribers found for topic");
-      puts("no subscribers found for topic");
       return;
     }
     message_type msg{content, ttl_, std::move(receivers)};
@@ -169,13 +180,12 @@ public:
     publish(content);
   }
 
-  void handle_subscription(std::vector<peer_id_type>& path,
-                           const std::vector<topic>& topics,
+  void handle_subscription(peer_id_list& path, const filter_type& filter,
                            uint64_t timestamp) {
     BROKER_TRACE(BROKER_ARG(path)
-                 << BROKER_ARG(topics) << BROKER_ARG(timestamp));
+                 << BROKER_ARG(filter) << BROKER_ARG(timestamp));
     // Drop nonsense messages.
-    if (path.empty() || topics.empty()) {
+    if (path.empty() || filter.empty()) {
       BROKER_WARNING("drop nonsense message");
       return;
     }
@@ -216,7 +226,7 @@ public:
     path.emplace_back(dref().id());
     for (auto& [pid, entry] : tbl_)
       if (!contains(path, pid))
-        dref().send(entry.hdl, atom::subscribe::value, path, topics, timestamp);
+        dref().send(entry.hdl, atom::subscribe::value, path, filter, timestamp);
     // Store the subscription if it's new.
     auto subscriber = path[0];
     auto& ts = peer_timestamps_[subscriber];
@@ -226,7 +236,7 @@ public:
         auto& vec = kvp.second;
         vec.erase(std::remove(vec.begin(), vec.end(), subscriber), vec.end());
       }
-      for (auto& x : topics)
+      for (auto& x : filter)
         peer_subscriptions_[x].emplace_back(subscriber);
       ts = timestamp;
     }
@@ -252,18 +262,18 @@ public:
     }
   }
 
-  /// Forwards `msg` to all `receivers`.
+  /// Forwards `msg` to all receivers.
   void ship(message_type& msg) {
     // Use one bucket for each direct connection. Then put all receivers into
     // the bucket with the shortest path to that receiver. On a tie, we pick
     // the alphabetically first bucket.
     using handle_type = communication_handle_type;
-    using value_type=std::pair<handle_type, std::vector<peer_id_type>>;
+    using value_type = std::pair<handle_type, peer_id_list>;
     std::map<peer_id_type, value_type> buckets;
     for (auto& kvp : tbl_)
       buckets.emplace(kvp.first,
-                      std::pair(kvp.second.hdl, std::vector<peer_id_type>{}));
-    auto get_bucket = [&](const peer_id_type& x) -> std::vector<peer_id_type>* {
+                      std::pair(kvp.second.hdl, peer_id_list{}));
+    auto get_bucket = [&](const peer_id_type& x) -> peer_id_list* {
       // Check for direct connection.
       auto i = buckets.find(x);
       if (i != buckets.end())
@@ -281,8 +291,13 @@ public:
         }
       }
       // Sanity check.
-      if (bucket_name.empty()) {
-        std::cerr << "no path found for " << x << '\n';
+      bool bucket_invalid;
+      if constexpr (std::is_constructible<bool, peer_id_type>::value)
+        bucket_invalid = !static_cast<bool>(bucket_name);
+      else
+        bucket_invalid = bucket_name.empty();
+      if (bucket_invalid) {
+        BROKER_DEBUG("no path found for " << x);
         return nullptr;
       }
       return &buckets[bucket_name].second;
@@ -299,6 +314,37 @@ public:
         get_unshared_receivers(msg_cpy) = std::move(bucket);
         dref().send(hdl, atom::publish::value, std::move(msg_cpy));
       }
+    }
+  }
+
+  /// Forwards `msg` to `receiver`.
+  void ship(data_message& data_msg, const peer_id_type& receiver) {
+    // Prepare node message.
+      message_type msg{std::move(data_msg), ttl_, {receiver}};
+    // Check for direct connection.
+    if (auto i = tbl_.find(receiver); i != tbl_.end()) {
+      dref().send(i->second.hdl, atom::publish::value, std::move(msg));
+      return;
+    }
+    // Find the peer with the shortest path to the receiver. On a tie, we pick
+    // the alphabetically first peer.
+    peer_id_type hop_id;
+    communication_handle_type hop_hdl;
+    size_t distance = std::numeric_limits<size_t>::max();
+    for (auto& [peer_id, entry] : tbl_) {
+      if (auto i = entry.distances.find(receiver); i != entry.distances.end()) {
+        auto x = i->second;
+        if (x < distance || (x == distance && peer_id < hop_id)) {
+          hop_id = peer_id;
+          hop_hdl = entry.hdl;
+          distance = x;
+        }
+      }
+    }
+    if (hop_hdl) {
+      dref().send(hop_hdl, atom::publish::value, std::move(msg));
+    } else {
+      BROKER_DEBUG("no path found for " << receiver);
     }
   }
 
@@ -373,7 +419,7 @@ private:
   std::vector<topic> subscriptions_;
 
   /// Stores all subscriptions from other peers.
-  std::map<topic, std::vector<peer_id_type>> peer_subscriptions_;
+  std::map<topic, peer_id_list> peer_subscriptions_;
 };
 
 } // namespace broker::alm

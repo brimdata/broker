@@ -37,6 +37,10 @@ struct connector_mock_base {
     return {std::move(fs)...};
   }
 
+  void ship(data_message&, const peer_id_type&) {
+    CAF_FAIL("connector_mock_base::ship called");
+  }
+
   caf::event_based_actor* self_;
 };
 

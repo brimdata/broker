@@ -405,12 +405,6 @@ public:
     d.handle_subscription(path, topics, timestamp);
   }
 
-  // -- unpeering --------------------------------------------------------------
-
-  void unpeer(const caf::actor& hdl) {
-    disconnect(hdl);
-  }
-
   // -- callbacks --------------------------------------------------------------
 
   /// Pushes `msg` to local workers.

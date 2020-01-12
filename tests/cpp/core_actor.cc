@@ -1,10 +1,8 @@
-#define SUITE core
+#define SUITE core_actor
 
 #include "broker/core_actor.hh"
 
 #include "test.hh"
-
-#include <caf/test/io_dsl.hpp>
 
 #include "broker/configuration.hh"
 #include "broker/endpoint.hh"
@@ -44,7 +42,7 @@ caf::behavior driver(driver_actor_type* self, const actor& sink,
   auto ptr = self->make_source(
     // Destination.
     sink,
-    // Initialize send buffer with 10 elements.
+    // Initialize state.
     [](caf::unit_t&) {
       // nop
     },
@@ -58,7 +56,7 @@ caf::behavior driver(driver_actor_type* self, const actor& sink,
         out.push(xs[i]);
       xs.erase(xs.begin(), xs.begin() + static_cast<ptrdiff_t>(n));
     },
-    // Did we reach the end?.
+    // Did we reach the end?
     [=](const caf::unit_t&) {
       auto& st = self->state;
       return !st.restartable && st.xs.empty();

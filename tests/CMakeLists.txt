@@ -9,7 +9,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/cpp)
 set(tests
   cpp/alm/peer.cc
   cpp/backend.cc
-  cpp/core.cc
+  cpp/core_actor.cc
   cpp/data.cc
   cpp/detail/data_generator.cc
   cpp/detail/generator_file_writer.cc

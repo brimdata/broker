@@ -264,14 +264,14 @@ public:
         ->request(hdl, std::chrono::minutes(10), atom::peer::value, d.id(),
                   self())
         .then(
-          [=](atom::peer, atom::ok, const peer_id_type& from) mutable {
-            if (from != remote_peer) {
-              BROKER_ERROR("received peering response from unknown peer");
+          [=](atom::peer, atom::ok, const peer_id_type& peered_id) mutable {
+            if (dref().id() != peered_id) {
+              BROKER_ERROR("received peering response for unknown peer");
               rp.deliver(make_error(ec::peer_invalid, "unexpected peer ID",
-                                    from, remote_peer));
+                                    peered_id, remote_peer));
               return;
             }
-            rp.deliver(atom::peer::value, atom::ok::value, from);
+            rp.deliver(atom::peer::value, atom::ok::value, remote_peer);
           },
           [=](caf::error& err) mutable { rp.deliver(std::move(err)); });
       return;

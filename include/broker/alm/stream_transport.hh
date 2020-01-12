@@ -112,7 +112,7 @@ public:
 
   // -- properties -------------------------------------------------------------
 
-  caf::event_based_actor* self() {
+  caf::event_based_actor* self() noexcept {
     // Our only constructor accepts an event-based actor. Hence, we know for
     // sure that this case is safe, even though the base type stores self_ as a
     // scheduled_actor pointer.
@@ -141,15 +141,19 @@ public:
     return output_slot(hdl) && input_slot(hdl);
   }
 
-  auto& peer_manager() {
+  const auto& pending_connections() const noexcept {
+    return pending_connections_;
+  }
+
+  auto& peer_manager() noexcept {
     return out_.template get<typename peer_trait::manager>();
   }
 
-  auto& worker_manager() {
+  auto& worker_manager() noexcept {
     return out_.template get<typename worker_trait::manager>();
   }
 
-  auto& store_manager() {
+  auto& store_manager() noexcept {
     return out_.template get<typename store_trait::manager>();
   }
 

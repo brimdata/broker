@@ -119,8 +119,14 @@ public:
 
 struct fixture : test_coordinator_fixture<config> {
 
+  // Returns the core manager for given actor.
   auto& mgr(caf::actor hdl) {
     return *deref<core_actor_type>(hdl).state.mgr;
+  }
+
+  // Returns the recorded consumer log for given actor.
+  auto& log(caf::actor hdl) {
+    return deref<consumer_actor_type>(hdl).state.xs;
   }
 
   auto id(caf::actor hdl) {
@@ -152,6 +158,11 @@ struct fixture : test_coordinator_fixture<config> {
       anon_send_exit(hdl, caf::exit_reason::user_shutdown);
   }
 
+  template <class... Ts>
+  void stop(Ts&&... xs) {
+    (anon_send_exit(xs, caf::exit_reason::user_shutdown), ...);
+  }
+
   caf::actor core1;
   caf::actor core2;
   caf::actor core3;
@@ -168,7 +179,6 @@ FIXTURE_SCOPE(local_tests, fixture)
 // Simulates a simple setup with two cores, where data flows from core1 to
 // core2.
 TEST(local_peers) {
-  // Spawn core actors and disable events.
   MESSAGE("connect a consumer (leaf) to core2");
   auto leaf = sys.spawn(consumer, filter_type{"b"}, core2);
   MESSAGE("core1: " << to_string(core1));
@@ -194,8 +204,7 @@ TEST(local_peers) {
   MESSAGE("driver: " << to_string(d1));
   run();
   MESSAGE("check log of the consumer after the driver is done");
-  CHECK_EQUAL(deref<consumer_actor_type>(leaf).state.xs,
-              data_msgs({{"b", T}, {"b", F}, {"b", T}, {"b", F}}));
+  CHECK_EQUAL(log(leaf), data_msgs({{"b", T}, {"b", F}, {"b", T}, {"b", F}}));
   MESSAGE("send message 'directly' from core1 to core2");
   inject((atom::publish, endpoint_info, data_message),
          from(self).to(core1).with(atom::publish::value,
@@ -203,7 +212,7 @@ TEST(local_peers) {
                                    make_data_message(topic("b"), data{true})));
   run();
   MESSAGE("check log of the consumer again");
-  CHECK_EQUAL(deref<consumer_actor_type>(leaf).state.xs,
+  CHECK_EQUAL(log(leaf),
               data_msgs({{"b", T}, {"b", F}, {"b", T}, {"b", F}, {"b", T}}));
   MESSAGE("unpeer core1 from core2");
   anon_send(core1, atom::unpeer::value, core2);
@@ -213,135 +222,48 @@ TEST(local_peers) {
   CHECK_EQUAL(mgr(core2).peer_handles().size(), 0u);
 }
 
-/*
-
 // Simulates a simple triangle setup where core1 peers with core2, and core2
 // peers with core3. Data flows from core1 to core2 and core3.
-CAF_TEST(triangle_peering) {
-  // Spawn core actors and disable events.
-  broker_options options;
-  options.disable_ssl = true;
-  auto core1 = sys.spawn(core_actor, filter_type{"a", "b", "c"}, options, nullptr);
-  auto core2 = sys.spawn(core_actor, filter_type{"a", "b", "c"}, options, nullptr);
-  auto core3 = sys.spawn(core_actor, filter_type{"a", "b", "c"}, options, nullptr);
-  anon_send(core1, atom::no_events::value);
-  anon_send(core2, atom::no_events::value);
-  anon_send(core3, atom::no_events::value);
-  run();
-  // Connect a consumer (leaf) to core1 (this consumer never receives data,
-  // because data isn't forwarded to local subscribers).
+TEST(triangle_peering) {
+  MESSAGE("connect consumers for topic 'b' to all cores");
+  // The consumer at core1 never receives any data, because data isn't forwarded
+  // to local subscribers.
   auto leaf1 = sys.spawn(consumer, filter_type{"b"}, core1);
-  // Connect a consumer (leaf) to core2.
   auto leaf2 = sys.spawn(consumer, filter_type{"b"}, core2);
-  run();
-  // Connect a consumer (leaf) to core3.
   auto leaf3 = sys.spawn(consumer, filter_type{"b"}, core3);
   run();
-  // Initiate handshake between core1 and core2.
-  self->send(core1, atom::peer::value, core2);
-  expect((atom::peer, actor), from(self).to(core1).with(_, core2));
+  MESSAGE("initiate handshake between core1 and core2");
+  inject((atom::peer, node_id, actor),
+         from(self).to(core1).with(atom::peer::value, id(core2), core2));
   // Check if core1 reports a pending peer.
-  CAF_MESSAGE("query peer information from core1");
-  sched.inline_next_enqueue();
-  self->request(core1, infinite, atom::get::value, atom::peer::value).receive(
-    [&](const std::vector<peer_info>& xs) {
-      CAF_REQUIRE_EQUAL(xs.size(), 1u);
-      CAF_REQUIRE_EQUAL(xs.front().status, peer_status::connecting);
-    },
-    [&](const error& err) {
-      CAF_FAIL(sys.render(err));
-    }
-  );
-  // Step #1: core1  --->    ('peer', filter_type)    ---> core2
-  expect((atom::peer, filter_type, actor),
-         from(core1).to(core2).with(_, filter_type{"a", "b", "c"}, core1));
+  CHECK_EQUAL(mgr(core1).pending_connections().count(id(core2)), 1u);
   run();
-  // Initiate handshake between core2 and core3.
-  self->send(core2, atom::peer::value, core3);
-  expect((atom::peer, actor), from(self).to(core2).with(_, core3));
-  // Check if core2 reports a pending peer.
-  CAF_MESSAGE("query peer information from core2");
-  sched.inline_next_enqueue();
-  self->request(core2, infinite, atom::get::value, atom::peer::value).receive(
-    [&](const std::vector<peer_info>& xs) {
-      CAF_REQUIRE_EQUAL(xs.size(), 2u);
-      CAF_REQUIRE_EQUAL(xs.front().status, peer_status::peered);
-      CAF_REQUIRE_EQUAL(xs.back().status, peer_status::connecting);
-    },
-    [&](const error& err) {
-      CAF_FAIL(sys.render(err));
-    }
-  );
-  // Perform further handshake steps.
+  MESSAGE("initiate handshake between core2 and core3");
+  inject((atom::peer, node_id, actor),
+         from(self).to(core2).with(atom::peer::value, id(core3), core3));
+  CHECK_EQUAL(mgr(core2).pending_connections().count(id(core3)), 1u);
   run();
-  // Check if all cores properly report peering setup.
-  CAF_MESSAGE("query peer information from core1");
-  sched.inline_next_enqueue();
-  self->request(core1, infinite, atom::get::value, atom::peer::value).receive(
-    [&](const std::vector<peer_info>& xs) {
-      CAF_REQUIRE_EQUAL(xs.size(), 1u);
-      CAF_REQUIRE_EQUAL(xs.front().status, peer_status::peered);
-    },
-    [&](const error& err) {
-      CAF_FAIL(sys.render(err));
-    }
-  );
-  CAF_MESSAGE("query peer information from core2");
-  sched.inline_next_enqueue();
-  self->request(core2, infinite, atom::get::value, atom::peer::value).receive(
-    [&](const std::vector<peer_info>& xs) {
-      CAF_REQUIRE_EQUAL(xs.size(), 2u);
-      CAF_REQUIRE_EQUAL(xs.front().status, peer_status::peered);
-      CAF_REQUIRE_EQUAL(xs.back().status, peer_status::peered);
-    },
-    [&](const error& err) {
-      CAF_FAIL(sys.render(err));
-    }
-  );
-  CAF_MESSAGE("query peer information from core3");
-  sched.inline_next_enqueue();
-  self->request(core3, infinite, atom::get::value, atom::peer::value).receive(
-    [&](const std::vector<peer_info>& xs) {
-      CAF_REQUIRE_EQUAL(xs.size(), 1u);
-      CAF_REQUIRE_EQUAL(xs.front().status, peer_status::peered);
-    },
-    [&](const error& err) {
-      CAF_FAIL(sys.render(err));
-    }
-  );
-  // Spin up driver on core1.
-  auto d1 = sys.spawn(driver, core1, false);
-  CAF_MESSAGE("d1: " << to_string(d1));
+  MESSAGE("check if all cores properly report the peering setup");
+  CHECK(mgr(core1).pending_connections().empty());
+  CHECK(mgr(core2).pending_connections().empty());
+  CHECK(mgr(core3).pending_connections().empty());
+  CHECK(mgr(core1).connected_to(core2));
+  CHECK(mgr(core2).connected_to(core1));
+  CHECK(mgr(core2).connected_to(core3));
+  CHECK(mgr(core3).connected_to(core2));
+  CHECK(not mgr(core1).connected_to(core3));
+  CHECK(not mgr(core3).connected_to(core1));
+  MESSAGE("attach and run driver on core1");
+  sys.spawn(driver, core1, false);
   run();
-  // Check log of the consumers.
-  using buf = std::vector<element_type>;
-  auto expected = data_msgs({{"b", true}, {"b", false},
-                             {"b", true}, {"b", false}});
-  for (auto& leaf : {leaf2, leaf3}) {
-    self->send(leaf, atom::get::value);
-    sched.prioritize(leaf);
-    consume_message();
-    self->receive(
-      [&](const buf& xs) {
-        CAF_REQUIRE_EQUAL(xs, expected);
-      }
-    );
-  }
-  // Make sure leaf1 never received any data.
-  self->send(leaf1, atom::get::value);
-  sched.prioritize(leaf1);
-  consume_message();
-  self->receive(
-    [&](const buf& xs) {
-      CAF_REQUIRE(xs.empty());
-    }
-  );
-  // Shutdown.
-  CAF_MESSAGE("Shutdown core actors.");
-  anon_send_exit(core1, exit_reason::user_shutdown);
-  anon_send_exit(core2, exit_reason::user_shutdown);
-  anon_send_exit(core3, exit_reason::user_shutdown);
+  MESSAGE("check log of the consumers");
+  CHECK(log(leaf1).empty());
+  CHECK_EQUAL(log(leaf2), data_msgs({{"b", T}, {"b", F}, {"b", T}, {"b", F}}));
+  CHECK_EQUAL(log(leaf3), data_msgs({{"b", T}, {"b", F}, {"b", T}, {"b", F}}));
+  stop(leaf1, leaf2, leaf3);
 }
+
+/*
 
 // Simulates a simple setup where core1 peers with core2 and starts sending
 // data. After receiving a couple of messages, core2 terminates and core3

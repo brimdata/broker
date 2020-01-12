@@ -109,7 +109,11 @@ public:
       [=](atom::publish, const network_info& addr, data_message& msg) {
         dref().try_publish(addr, msg, super::self()->make_response_promise());
       },
-      lift<atom::peer>(d, &Subtype::try_peering));
+      lift<atom::peer>(d, &Subtype::try_peering),
+      [=](atom::unpeer, const network_info& addr) {
+        if (auto hdl = cache_.find(addr))
+          dref().unpeer(*hdl);
+      });
   }
 
   auto& cache() {

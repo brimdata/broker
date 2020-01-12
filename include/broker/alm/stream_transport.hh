@@ -591,30 +591,23 @@ public:
       [this](atom::publish, atom::local, data_message msg) {
         worker_manager().push(msg);
       },
-      [this](atom::unpeer, const caf::actor& hdl) { dref().disconnect(hdl); });
+      [this](atom::unpeer, const caf::actor& hdl) { dref().unpeer(hdl); },
+      [this](atom::unpeer, const peer_id_type& peer_id) {
+        dref().unpeer(peer_id);
+      });
   }
 
 protected:
   /// Disconnects a peer by demand of the user.
-  void disconnect(const caf::actor& hdl) {
-    BROKER_TRACE(BROKER_ARG(hdl));
+  void unpeer(const peer_id_type& peer_id, const caf::actor& hdl) {
+    BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
     // Check whether we disconnect from the peer during the handshake.
-    auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
-    if (auto i = std::find_if(pending_connections_.begin(),
-                              pending_connections_.end(), predicate);
+    if (auto i = pending_connections_.find(peer_id);
         i != pending_connections_.end()) {
       error err = ec::peer_disconnect_during_handshake;
       for (auto& promise : i->second.promises)
         promise.deliver(err);
       pending_connections_.erase(i);
-      return;
-    }
-    // Fetch the node ID from the routing table and invoke callbacks.
-    auto& d = dref();
-    error reason;
-    if (auto remote_id = get_peer_id(d.tbl(), hdl)) {
-      // peer::peer_disconnected ultimately removes the entry from the table.
-      d.peer_disconnected(*remote_id, hdl, reason);
     }
     // Close the associated outbound path.
     if (auto i = hdl_to_ostream_.find(hdl); i != hdl_to_ostream_.end()) {
@@ -623,9 +616,47 @@ protected:
     }
     // Close the associated inbound path.
     if (auto i = hdl_to_istream_.find(hdl); i != hdl_to_istream_.end()) {
+      error reason;
       remove_input_path(i->second, reason, false);
       hdl_to_istream_.erase(i);
     }
+    dref().peer_removed(peer_id, hdl);
+  }
+
+  /// Disconnects a peer by demand of the user.
+  void unpeer(const peer_id_type& peer_id) {
+    BROKER_TRACE(BROKER_ARG(peer_id));
+    auto& tbl = super::tbl();
+    if (auto i = tbl.find(peer_id); i != tbl.end()) {
+      auto hdl = i->second.hdl;
+      dref().unpeer(peer_id, hdl);
+      return;
+    }
+    auto i = pending_connections_.find(peer_id);
+    if (i != pending_connections_.end()) {
+      auto hdl = i->second.hdl;
+      dref().unpeer(peer_id, hdl);
+      return;
+    }
+    BROKER_DEBUG("cannot unpeer from uknown ID" << peer_id);
+  }
+
+  /// Disconnects a peer by demand of the user.
+  void unpeer(const caf::actor& hdl) {
+    BROKER_TRACE(BROKER_ARG(hdl));
+    if (auto remote_id = get_peer_id(super::tbl(), hdl)) {
+      dref().unpeer(*remote_id, hdl);
+      return;
+    }
+    auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
+    if (auto i = std::find_if(pending_connections_.begin(),
+                              pending_connections_.end(), predicate);
+        i != pending_connections_.end()) {
+      auto remote_id = i->first;
+      dref().unpeer(remote_id, hdl);
+      return;
+    }
+    BROKER_DEBUG("cannot unpeer from uknown actor" << hdl);
   }
 
   /// Disconnects a peer as a result of receiving a `drop`, `forced_drop`,

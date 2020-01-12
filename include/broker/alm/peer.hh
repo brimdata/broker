@@ -369,14 +369,24 @@ public:
     // nop
   }
 
-  /// Called whenever this peer lost connection to a remote peer.
+  /// Called whenever this peer lost a connection to a remote peer.
   /// @param remote_id ID of the disconnected peer.
-  /// @param hdl Communication handle for exchanging messages with the new peer.
+  /// @param hdl Communication handle of the disconnected peer.
   /// @param reason None if we closed the connection gracefully, otherwise
   ///               contains the transport-specific error code.
   void peer_disconnected([[maybe_unused]] const peer_id_type& remote_id,
                          [[maybe_unused]] const communication_handle_type& hdl,
                          [[maybe_unused]] const error& reason) {
+    // Do the same cleanup steps we do for removed peers. We intentionally do
+    // *not* dispatch through dref() to not trigger undesired side effects.
+    peer_removed(remote_id, hdl);
+  }
+
+  /// Called whenever this peer removed a connection to a remote peer.
+  /// @param remote_id ID of the removed peer.
+  /// @param hdl Communication handle of the removed peer.
+  void peer_removed([[maybe_unused]] const peer_id_type& remote_id,
+                    [[maybe_unused]] const communication_handle_type& hdl) {
     tbl_.erase(remote_id);
     if (distance_to(remote_id) == nil) {
       auto& subs = peer_subscriptions_;
@@ -418,6 +428,12 @@ public:
           if (std::any_of(subs.begin(), subs.end(), is_direct_peer))
             filter_extend(result, x);
         return result;
+      },
+      [=](atom::shutdown) {
+        // TODO: this handler exists only for backwards-compatibility. Consider
+        //       simply using CAF's exit messages instead of using this
+        //       anti-pattern.
+        dref().self()->quit(caf::exit_reason::user_shutdown);
       },
     };
   }

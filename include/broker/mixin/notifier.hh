@@ -44,6 +44,12 @@ public:
     super::peer_disconnected(remote_id, hdl, reason);
   }
 
+  void peer_removed(const peer_id_type& remote_id,
+                    const communication_handle_type& hdl) {
+    emit(remote_id, sc::peer_removed, "removed connection to remote peer");
+    super::peer_removed(remote_id, hdl);
+  }
+
   void disable_notifications() {
     errors_ = caf::group{};
     statuses_ = caf::group{};
@@ -54,7 +60,13 @@ public:
     using detail::lift;
     auto& d = dref();
     return super::make_behavior(
-      fs..., lift<atom::no_events>(d, &Subtype::disable_notifications));
+      fs..., lift<atom::no_events>(d, &Subtype::disable_notifications),
+      [](atom::add, atom::status, const caf::actor&) {
+        // TODO: this handler exists only for backwards-compatibility. It used
+        //       to register status subscribers for synchronization. Eventually,
+        //       we should either re-implement the synchronization if necessary
+        //       or remove this handler.
+      });
   }
 
 private:

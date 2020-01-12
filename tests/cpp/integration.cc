@@ -398,8 +398,7 @@ CAF_TEST(topic_prefix_matching_make_subscriber) {
     return xs;
   };
   mercury.loop_after_next_enqueue();
-  CAF_CHECK_EQUAL(mercury.ep.peer_subscriptions(),
-                  filter({"zeek/events", "zeek/events/failures"}));
+  CAF_CHECK_EQUAL(mercury.ep.peer_subscriptions(), filter({"zeek/events"}));
   venus.loop_after_next_enqueue();
   CAF_CHECK_EQUAL(venus.ep.peer_subscriptions(), filter({}));
   earth.loop_after_next_enqueue();

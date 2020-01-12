@@ -37,8 +37,14 @@ struct connector_mock_base {
     return {std::move(fs)...};
   }
 
-  void ship(data_message&, const peer_id_type&) {
+  template <class... Ts>
+  void ship(Ts&&...) {
     CAF_FAIL("connector_mock_base::ship called");
+  }
+
+  template <class... Ts>
+  void unpeer(Ts&&...) {
+    CAF_FAIL("connector_mock_base::unpeer called");
   }
 
   caf::event_based_actor* self_;

@@ -378,6 +378,17 @@ public:
                          [[maybe_unused]] const communication_handle_type& hdl,
                          [[maybe_unused]] const error& reason) {
     tbl_.erase(remote_id);
+    if (distance_to(remote_id) == nil) {
+      auto& subs = peer_subscriptions_;
+      for (auto i = subs.begin(); i != subs.end();) {
+        auto& lst = i->second;
+        lst.erase(std::remove(lst.begin(), lst.end(), remote_id), lst.end());
+        if (lst.empty())
+          i = subs.erase(i);
+        else
+          ++i;
+      }
+    }
   }
 
   // -- factories --------------------------------------------------------------

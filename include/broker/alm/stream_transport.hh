@@ -22,17 +22,20 @@ namespace broker::alm {
 /// The transport registers these message handlers:
 ///
 /// ~~~
-/// (atom::peer, peer_id_type, actor)
-/// -> void start_peering(...)
+/// (atom::peer, peer_id_type id, actor hdl) -> void
+/// => start_peering(id, hdl)
 ///
-/// (atom::peer, actor, peer_id_type, filter_type, uint64_t)
-/// -> outbound_stream_slot<...> handle_peering_request(...)
+/// (atom::peer, actor, peer_id_type, filter_type, uint64_t) -> slot
+/// => handle_peering_request(...)
 ///
-/// (stream<node_message>, actor, peer_id_type, filter_type, uint64_t)
-/// -> outbound_stream_slot<...> handle_peering_handshake_1(...)
+/// (stream<node_message>, actor, peer_id_type, filter_type, uint64_t) -> slot
+/// => handle_peering_handshake_1(...)
 ///
-/// (stream<node_message>, actor, peer_id_type)
-/// -> void handle_peering_handshake_2(...)
+/// (stream<node_message>, actor, peer_id_type) -> void
+/// => handle_peering_handshake_2(...)
+///
+/// (atom::unpeer, actor hdl) -> void
+/// => disconnect(hdl)
 /// ~~~
 template <class Derived, class PeerId>
 class stream_transport : public peer<Derived, PeerId, caf::actor>,
@@ -398,6 +401,12 @@ public:
     d.handle_subscription(path, topics, timestamp);
   }
 
+  // -- unpeering --------------------------------------------------------------
+
+  void unpeer(const caf::actor& hdl) {
+    disconnect(hdl);
+  }
+
   // -- callbacks --------------------------------------------------------------
 
   /// Pushes `msg` to local workers.
@@ -562,30 +571,67 @@ public:
       lift<atom::join>(d, &Derived::add_sending_worker),
       lift<atom::join, atom::store>(d, &Derived::add_sending_store),
       // Trigger peering to remotes.
-      [=](atom::peer, const peer_id_type& remote_peer, const caf::actor& hdl) {
+      [this](atom::peer, const peer_id_type& remote_peer,
+             const caf::actor& hdl) {
         dref().start_peering(remote_peer, hdl, self()->make_response_promise());
       },
       // Per-stream subscription updates.
-      [=](atom::join, atom::update, caf::stream_slot slot,
-          filter_type& filter) {
+      [this](atom::join, atom::update, caf::stream_slot slot,
+             filter_type& filter) {
         dref().subscribe(filter);
         worker_manager().set_filter(slot, filter);
       },
-      [=](atom::join, atom::update, caf::stream_slot slot, filter_type& filter,
-          const caf::actor& listener) {
+      [this](atom::join, atom::update, caf::stream_slot slot,
+             filter_type& filter, const caf::actor& listener) {
         dref().subscribe(filter);
         worker_manager().set_filter(slot, filter);
         self()->send(listener, true);
       },
       // Allow local publishers to hoook directly into the stream.
-      [=](caf::stream<data_message> in) { add_unchecked_inbound_path(in); },
+      [this](caf::stream<data_message> in) { add_unchecked_inbound_path(in); },
       // Special handlers for bypassing streams and/or forwarding.
-      [=](atom::publish, atom::local, data_message msg) {
+      [this](atom::publish, atom::local, data_message msg) {
         worker_manager().push(msg);
-      });
+      },
+      [this](atom::unpeer, const caf::actor& hdl) { dref().disconnect(hdl); });
   }
 
 protected:
+  /// Disconnects a peer by demand of the user.
+  void disconnect(const caf::actor& hdl) {
+    BROKER_TRACE(BROKER_ARG(hdl));
+    // Check whether we disconnect from the peer during the handshake.
+    auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
+    if (auto i = std::find_if(pending_connections_.begin(),
+                              pending_connections_.end(), predicate);
+        i != pending_connections_.end()) {
+      error err = ec::peer_disconnect_during_handshake;
+      for (auto& promise : i->second.promises)
+        promise.deliver(err);
+      pending_connections_.erase(i);
+      return;
+    }
+    // Fetch the node ID from the routing table and invoke callbacks.
+    auto& d = dref();
+    error reason;
+    if (auto remote_id = get_peer_id(d.tbl(), hdl)) {
+      // peer::peer_disconnected ultimately removes the entry from the table.
+      d.peer_disconnected(*remote_id, hdl, reason);
+    }
+    // Close the associated outbound path.
+    if (auto i = hdl_to_ostream_.find(hdl); i != hdl_to_ostream_.end()) {
+      out_.close(i->second);
+      hdl_to_ostream_.erase(i);
+    }
+    // Close the associated inbound path.
+    if (auto i = hdl_to_istream_.find(hdl); i != hdl_to_istream_.end()) {
+      remove_input_path(i->second, reason, false);
+      hdl_to_istream_.erase(i);
+    }
+  }
+
+  /// Disconnects a peer as a result of receiving a `drop`, `forced_drop`,
+  /// `close`, or `force_close` message.
   template <class Cause>
   void disconnect(const caf::actor& hdl, const error& reason, const Cause&) {
     BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(reason));
@@ -666,7 +712,7 @@ protected:
   void handle_impl(caf::stream_slots slots, Cause& cause) {
     auto path = out_.path(slots.receiver);
     if (!path || path->hdl == nullptr) {
-      BROKER_ERROR("closed outbound path with invalid communication handle");
+      BROKER_DEBUG("closed outbound path with invalid communication handle");
     } else {
       auto hdl = caf::actor_cast<caf::actor>(path->hdl);
       if constexpr (std::is_same<caf::upstream_msg::drop, Cause>::value) {

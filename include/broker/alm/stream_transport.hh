@@ -591,7 +591,6 @@ public:
       [this](atom::publish, atom::local, data_message msg) {
         worker_manager().push(msg);
       },
-      [this](atom::unpeer, const caf::actor& hdl) { dref().unpeer(hdl); },
       [this](atom::unpeer, const peer_id_type& peer_id) {
         dref().unpeer(peer_id);
       });
@@ -601,9 +600,14 @@ protected:
   /// Disconnects a peer by demand of the user.
   void unpeer(const peer_id_type& peer_id, const caf::actor& hdl) {
     BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
+    // Keeps track of how many successful cleanup steps we perform. If this
+    // counter is still 0 at the end of this function than this function was
+    // called with an unknown peer.
+    size_t cleanup_steps = 0;
     // Check whether we disconnect from the peer during the handshake.
     if (auto i = pending_connections_.find(peer_id);
         i != pending_connections_.end()) {
+      ++cleanup_steps;
       error err = ec::peer_disconnect_during_handshake;
       for (auto& promise : i->second.promises)
         promise.deliver(err);
@@ -611,16 +615,26 @@ protected:
     }
     // Close the associated outbound path.
     if (auto i = hdl_to_ostream_.find(hdl); i != hdl_to_ostream_.end()) {
+      ++cleanup_steps;
       out_.close(i->second);
       hdl_to_ostream_.erase(i);
     }
     // Close the associated inbound path.
     if (auto i = hdl_to_istream_.find(hdl); i != hdl_to_istream_.end()) {
+      ++cleanup_steps;
       error reason;
       remove_input_path(i->second, reason, false);
       hdl_to_istream_.erase(i);
     }
-    dref().peer_removed(peer_id, hdl);
+    // The callback peer_removed ultimately removes the entry from the routing
+    // table. Since some implementations of peer_removed may still query the
+    // routing table, we only check whether peer_id exists in the routing table
+    // rather than calling `erase`.
+    cleanup_steps += super::tbl().count(peer_id);
+    if (cleanup_steps > 0)
+      dref().peer_removed(peer_id, hdl);
+    else
+      dref().cannot_remove_peer(peer_id);
   }
 
   /// Disconnects a peer by demand of the user.
@@ -638,7 +652,7 @@ protected:
       dref().unpeer(peer_id, hdl);
       return;
     }
-    BROKER_DEBUG("cannot unpeer from uknown ID" << peer_id);
+    dref().cannot_remove_peer(peer_id);
   }
 
   /// Disconnects a peer by demand of the user.
@@ -656,7 +670,7 @@ protected:
       dref().unpeer(remote_id, hdl);
       return;
     }
-    BROKER_DEBUG("cannot unpeer from uknown actor" << hdl);
+    dref().cannot_remove_peer(hdl);
   }
 
   /// Disconnects a peer as a result of receiving a `drop`, `forced_drop`,

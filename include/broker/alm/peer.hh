@@ -401,6 +401,20 @@ public:
     }
   }
 
+  /// Called whenever the user tried to unpeer from an unknown peer.
+  /// @param xs Either a peer ID, an actor handle or a network info.
+  template <class T>
+  void cannot_remove_peer([[maybe_unused]] const T& x) {
+    BROKER_DEBUG("cannot unpeer from uknown peer" << x);
+  }
+
+  /// Called whenever establishing a connection to a remote peer failed.
+  /// @param xs Either a peer ID or a network info.
+  template <class T>
+  void peer_unavailable([[maybe_unused]] const T& x) {
+    // nop
+  }
+
   // -- factories --------------------------------------------------------------
 
   template <class... Fs>

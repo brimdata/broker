@@ -14,7 +14,7 @@ using namespace broker;
 
 namespace {
 
-using peer_id = std::string;
+using peer_id = caf::node_id;
 
 struct dummy_cache {
   template <class OnSuccess, class OnError>
@@ -44,7 +44,7 @@ public:
     return id_;
   }
 
-  void id(peer_id new_id) noexcept {
+  void id(caf::node_id new_id) noexcept {
     id_ = std::move(new_id);
   }
 
@@ -53,7 +53,7 @@ public:
   }
 
 private:
-  peer_id id_;
+  caf::node_id id_;
   dummy_cache cache_;
 };
 
@@ -66,7 +66,7 @@ struct stream_peer_actor_state {
 
 using stream_peer_actor_type = caf::stateful_actor<stream_peer_actor_state>;
 
-caf::behavior stream_peer_actor(stream_peer_actor_type* self, peer_id id) {
+caf::behavior stream_peer_actor(stream_peer_actor_type* self, caf::node_id id) {
   auto& mgr = self->state.mgr;
   mgr = caf::make_counted<stream_peer_manager>(self);
   mgr->id(std::move(id));
@@ -91,13 +91,19 @@ caf::behavior subscriber(subscriber_type* self, caf::actor aut) {
 struct fixture : test_coordinator_fixture<> {
   using peer_ids = std::vector<peer_id>;
 
+  auto make_id(caf::string_view str) {
+    return caf::make_node_id(unbox(caf::make_uri("test:a")));
+  }
+
   fixture() {
-    for (auto& id : peer_ids{"A", "B"})
+    auto id_a = make_id("test:a");
+    auto id_b = make_id("test:a");
+    for (auto& id : peer_ids{id_a, id_b})
       peers[id] = sys.spawn(stream_peer_actor, id);
     auto& groups = sys.groups();
     logger = sys.spawn_in_groups({groups.get_local("broker/errors"),
                                   groups.get_local("broker/statuses")},
-                                 subscriber, peers["A"]);
+                                 subscriber, peers[id_a]);
     run();
   }
 
@@ -120,6 +126,10 @@ struct fixture : test_coordinator_fixture<> {
     return {std::forward<Ts>(xs)...};
   }
 
+  peer_id id_a;
+
+  peer_id id_b;
+
   std::map<peer_id, caf::actor> peers;
 
   caf::actor logger;
@@ -130,19 +140,19 @@ struct fixture : test_coordinator_fixture<> {
 FIXTURE_SCOPE(notifier_tests, fixture)
 
 TEST(connect and graceful disconnect emits peer_added and peer_lost) {
-  anon_send(peers["A"], atom::peer::value, "B", peers["B"]);
+  anon_send(peers[id_a], atom::peer::value, id_b, peers[id_b]);
   run();
   CHECK_EQUAL(log(), make_log("peer_added"));
-  anon_send_exit(peers["B"], caf::exit_reason::user_shutdown);
+  anon_send_exit(peers[id_b], caf::exit_reason::user_shutdown);
   run();
   CHECK_EQUAL(log(), make_log("peer_added", "peer_lost"));
 }
 
 TEST(connect and ungraceful disconnect emits peer_added and peer_lost) {
-  anon_send(peers["A"], atom::peer::value, "B", peers["B"]);
+  anon_send(peers[id_a], atom::peer::value, id_b, peers[id_b]);
   run();
   CHECK_EQUAL(log(), make_log("peer_added"));
-  anon_send_exit(peers["B"], caf::exit_reason::kill);
+  anon_send_exit(peers[id_b], caf::exit_reason::kill);
   run();
   CHECK_EQUAL(log(), make_log("peer_added", "peer_lost"));
 }

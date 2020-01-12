@@ -60,6 +60,7 @@ public:
             [=](error& err) mutable { rp.deliver(std::move(err)); });
       },
       [=](error err) mutable {
+        dref().peer_unavailable(addr);
         if (addr.retry.count() == 0 && ++count < 10) {
           rp.deliver(std::move(err));
         } else {
@@ -113,6 +114,8 @@ public:
       [=](atom::unpeer, const network_info& addr) {
         if (auto hdl = cache_.find(addr))
           dref().unpeer(*hdl);
+        else
+          dref().cannot_remove_peer(addr);
       });
   }
 

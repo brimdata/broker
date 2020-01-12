@@ -47,6 +47,16 @@ struct connector_mock_base {
     CAF_FAIL("connector_mock_base::unpeer called");
   }
 
+  template <class... Ts>
+  void cannot_remove_peer(Ts&&...) {
+    CAF_FAIL("connector_mock_base::cannot_remove_peer called");
+  }
+
+  template <class... Ts>
+  void peer_unavailable(const Ts&...) {
+    // nop
+  }
+
   caf::event_based_actor* self_;
 };
 

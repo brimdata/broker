@@ -4,9 +4,6 @@ namespace broker {
 
 caf::behavior core_manager::make_behavior() {
   return super::make_behavior(
-    [=](atom::publish, endpoint_info& receiver, data_message& msg) {
-      ship(msg, receiver.node);
-    },
     [=](atom::get, atom::peer) {
       std::vector<peer_info> result;
       // Add all direct connections from the routing table.

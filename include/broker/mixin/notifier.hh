@@ -24,6 +24,12 @@ public:
 
   using communication_handle_type = typename Base::communication_handle_type;
 
+  // The notifier embeds `endpoint_info` objects into status and error updates.
+  // While we keep the implementation as generic as possible, the current
+  // implementation `endpoint_info` prohibits any other peer ID type at the
+  // moment.
+  static_assert(std::is_same<peer_id_type, caf::node_id>::value);
+
   template <class... Ts>
   explicit notifier(Ts&&... xs) : super(std::forward<Ts>(xs)...) {
     auto& groups = super::self()->system().groups();
@@ -50,6 +56,17 @@ public:
     super::peer_removed(remote_id, hdl);
   }
 
+  void peer_unavailable(const network_info& addr) {
+    auto self = super::self();
+    emit({}, addr, ec::peer_unavailable, "unable to connect to remote peer");
+  }
+
+  template <class T>
+  void cannot_remove_peer(const T& x) {
+    emit(x, ec::peer_invalid, "cannot unpeer from unknown peer");
+    super::cannot_remove_peer(x);
+  }
+
   void disable_notifications() {
     errors_ = caf::group{};
     statuses_ = caf::group{};
@@ -61,6 +78,9 @@ public:
     auto& d = dref();
     return super::make_behavior(
       fs..., lift<atom::no_events>(d, &Subtype::disable_notifications),
+      [=](atom::publish, endpoint_info& receiver, data_message& msg) {
+        dref().ship(msg, receiver.node);
+      },
       [](atom::add, atom::status, const caf::actor&) {
         // TODO: this handler exists only for backwards-compatibility. It used
         //       to register status subscribers for synchronization. Eventually,
@@ -74,38 +94,63 @@ private:
     return *static_cast<Subtype*>(this);
   }
 
+  template <class Enum>
+  void emit(const peer_id_type& remote_id, const network_info& x, Enum code,
+            const char* msg) {
+    BROKER_INFO("emit:" << code << x);
+    auto self = super::self();
+    if constexpr (std::is_same<Enum, sc>::value)
+      self->send(statuses_, atom::local::value,
+                 status::make(code, endpoint_info{remote_id, x}, msg));
+    else
+      self->send(errors_, atom::local::value,
+                 make_error(code, endpoint_info{remote_id, x}, msg));
+  }
+
+  template <class Enum>
+  void emit(const network_info& x, Enum code, const char* msg) {
+    BROKER_INFO("emit:" << code << x);
+    auto self = super::self();
+    if constexpr (std::is_same<Enum, sc>::value)
+      self->send(statuses_, atom::local::value,
+                 status::make(code, endpoint_info{{}, x}, msg));
+    else
+      self->send(errors_, atom::local::value,
+                 make_error(code, endpoint_info{{}, x}, msg));
+  }
+
   /// Reports an error to all status subscribers.
   template <class Enum>
   void emit(const communication_handle_type& hdl, Enum code, const char* msg) {
-    auto self = super::self();
-    auto emit = [=](network_info x) {
-      BROKER_INFO("emit:" << code << x);
-      if constexpr (std::is_same<Enum, sc>::value)
-        self->send(statuses_, atom::local::value,
-                   status::make(code, endpoint_info{hdl.node(), std::move(x)},
-                                msg));
-      else
-        self->send(errors_, atom::local::value,
-                   make_error(code, endpoint_info{hdl.node(), std::move(x)},
-                              msg));
-    };
-    if (self->node() != hdl.node()) {
-      auto on_cache_hit = [=](network_info x) { emit(std::move(x)); };
-      auto on_cache_miss = [=](caf::error) { emit({}); };
+    if (auto peer_id_opt = get_peer_id(dref().tbl(), hdl)) {
+      auto peer_id = std::move(*peer_id_opt);
+      auto on_cache_hit = [=](network_info x) { emit(peer_id, x, code, msg); };
+      auto on_cache_miss = [=](caf::error) { emit(peer_id, {}, code, msg); };
       dref().cache().fetch(hdl, on_cache_hit, on_cache_miss);
     } else {
-      emit({});
+      auto on_cache_hit = [=](network_info x) { emit({}, x, code, msg); };
+      auto on_cache_miss = [=](caf::error) {
+        if constexpr (std::is_same<caf::node_id, peer_id_type>::value) {
+          emit(hdl.node(), {}, code, msg);
+        } else {
+          BROKER_DEBUG(
+            "cannot resolve actor handle to network info or ID:" << hdl);
+          emit({}, {}, code, msg);
+        }
+      };
+      dref().cache().fetch(hdl, on_cache_hit, on_cache_miss);
     }
   }
 
   template <class Enum>
   void emit(const peer_id_type& remote_id, Enum code, const char* msg) {
+    auto on_cache_hit = [=](network_info x) { emit(remote_id, x, code, msg); };
+    auto on_cache_miss = [=](caf::error) { emit(remote_id, {}, code, msg); };
     auto& tbl = dref().tbl();
-    auto i = tbl.find(remote_id);
-    if (i != tbl.end()) {
-      emit(i->second.hdl, code, msg);
+    if (auto i = tbl.find(remote_id); i != tbl.end()) {
+      dref().cache().fetch(i->second.hdl, on_cache_hit, on_cache_miss);
     } else {
-      BROKER_ERROR("no entry found in routing table for" << remote_id);
+      on_cache_miss({});
     }
   }
 

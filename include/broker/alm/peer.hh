@@ -105,7 +105,7 @@ public:
     return timestamp_;
   }
 
-  auto peer_handles() const noexcept {
+  auto peer_handles() const {
     std::vector<caf::actor> result;
     for (auto& kvp : tbl_)
       result.emplace_back(kvp.second.hdl);
@@ -405,6 +405,20 @@ public:
       lift<atom::publish>(d, &Derived::handle_publication),
       lift<atom::subscribe>(d, &Derived::handle_subscription),
       [=](atom::get, atom::id) { return dref().id(); },
+      [=](atom::get, atom::peer, atom::subscriptions) {
+        // For backwards-compatibility, we only report the subscriptions of our
+        // direct peers. Returning all subscriptions would make more sense in an
+        // ALM setting, but that would change the semantics of
+        // endpoint::peer_subscriptions.
+        auto is_direct_peer = [this](const auto& peer_id) {
+          return tbl_.count(peer_id)!=0;
+        };
+        filter_type result;
+        for (const auto& [x, subs] : peer_subscriptions_)
+          if (std::any_of(subs.begin(), subs.end(), is_direct_peer))
+            filter_extend(result, x);
+        return result;
+      },
     };
   }
 

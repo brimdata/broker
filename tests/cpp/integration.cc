@@ -36,6 +36,7 @@
 #include <caf/variant.hpp>
 
 #include "broker/configuration.hh"
+#include "broker/core_actor.hh"
 #include "broker/endpoint.hh"
 #include "broker/error.hh"
 #include "broker/peer_info.hh"
@@ -125,6 +126,12 @@ struct peer_fixture {
   // Stores the interval between two credit rounds.
   caf::timespan credit_round_interval;
 
+  // Returns the core manager for given core actor.
+  auto& mgr(caf::actor hdl) {
+    auto ptr = caf::actor_cast<caf::abstract_actor*>(hdl);
+    return *dynamic_cast<core_actor_type&>(*ptr).state.mgr;
+  }
+
   // Initializes this peer and registers it at parent.
   peer_fixture(global_fixture* parent_ptr, std::string peer_name)
     : parent(parent_ptr),
@@ -137,10 +144,12 @@ struct peer_fixture {
       credit_round_interval(get_or(sys.config(),
                             "stream.credit-round-interval",
                             caf::defaults::stream::credit_round_interval)) {
-    // Register at parent.
-    parent->peers.emplace(name, this);
     // Run initialization code
     exec_loop();
+    // Give the core actor a recognizable ID.
+    mgr(ep.core()).id(caf::make_node_id(unbox(caf::make_uri("test:" + name))));
+    // Register at parent.
+    parent->peers.emplace(name, this);
   }
 
   ~peer_fixture() {
@@ -330,8 +339,7 @@ CAF_TEST(topic_prefix_matching_async_subscribe) {
     return xs;
   };
   mercury.loop_after_next_enqueue();
-  CAF_CHECK_EQUAL(mercury.ep.peer_subscriptions(),
-                  filter({"zeek/events", "zeek/events/failures"}));
+  CAF_CHECK_EQUAL(mercury.ep.peer_subscriptions(), filter({"zeek/events"}));
   venus.loop_after_next_enqueue();
   CAF_CHECK_EQUAL(venus.ep.peer_subscriptions(), filter({}));
   earth.loop_after_next_enqueue();

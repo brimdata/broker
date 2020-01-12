@@ -324,7 +324,7 @@ std::vector<topic> endpoint::peer_subscriptions() const {
   self->request(core(), caf::infinite, atom::get::value,
                 atom::peer::value, atom::subscriptions::value)
   .receive(
-    [&](std::vector<topic>& ts) {
+    [&](filter_type& ts) {
       result = std::move(ts);
     },
     [](const caf::error& e) {

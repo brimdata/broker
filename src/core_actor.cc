@@ -4,8 +4,24 @@ namespace broker {
 
 caf::behavior core_manager::make_behavior() {
   return super::make_behavior(
-    [this](atom::publish, endpoint_info& receiver, data_message& msg) {
+    [=](atom::publish, endpoint_info& receiver, data_message& msg) {
       ship(msg, receiver.node);
+    },
+    [=](atom::get, atom::peer) {
+      std::vector<peer_info> result;
+      // Add all direct connections from the routing table.
+      for (const auto& [peer_id, row] : tbl()) {
+        endpoint_info ep{peer_id, cache().find(row.hdl)};
+        result.push_back(
+          {std::move(ep), peer_flags::remote, peer_status::peered});
+      }
+      // Add all pending peerings from the stream transport.
+      for (const auto& [peer_id, pending_conn] : pending_connections()) {
+        endpoint_info ep{peer_id, cache().find(pending_conn.hdl)};
+        result.push_back(
+          {std::move(ep), peer_flags::remote, peer_status::connected});
+      }
+      return result;
     });
 }
 

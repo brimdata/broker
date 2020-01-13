@@ -25,6 +25,12 @@ struct dummy_cache {
       g(make_error(caf::sec::cannot_connect_to_node));
   }
 
+  optional<network_info> find(const caf::actor&) {
+    if (enabled)
+      return network_info{"localhost", 8080};
+    return nil;
+  }
+
   bool enabled = true;
 };
 

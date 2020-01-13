@@ -37,37 +37,50 @@ public:
     statuses_ = groups.get_local("broker/statuses");
   }
 
-  void peer_connected(const peer_id_type& remote_id,
+  void peer_connected(const peer_id_type& peer_id,
                       const communication_handle_type& hdl) {
-    emit(remote_id, sc::peer_added, "handshake successful");
-    super::peer_connected(remote_id, hdl);
+    BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
+    emit(peer_id, sc::peer_added, "handshake successful");
+    super::peer_connected(peer_id, hdl);
   }
 
-  void peer_disconnected(const peer_id_type& remote_id,
+  void peer_disconnected(const peer_id_type& peer_id,
                          const communication_handle_type& hdl,
                          const error& reason) {
-    emit(remote_id, sc::peer_lost, "lost connection to remote peer");
-    super::peer_disconnected(remote_id, hdl, reason);
+    BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl) << BROKER_ARG(reason));
+    // Calling emit() with the peer_id only trigges a network info lookup that
+    // can stall this actor if we're already in shutdown mode. Hence, we perform
+    // a manual cache lookup and simply omit the network information if we
+    // cannot find a cached entry.
+    network_info peer_addr;
+    if (auto addr = dref().cache().find(hdl))
+      peer_addr = *addr;
+    emit(peer_id, peer_addr, sc::peer_lost, "lost connection to remote peer");
+    super::peer_disconnected(peer_id, hdl, reason);
   }
 
-  void peer_removed(const peer_id_type& remote_id,
+  void peer_removed(const peer_id_type& peer_id,
                     const communication_handle_type& hdl) {
-    emit(remote_id, sc::peer_removed, "removed connection to remote peer");
-    super::peer_removed(remote_id, hdl);
+    BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
+    emit(peer_id, sc::peer_removed, "removed connection to remote peer");
+    super::peer_removed(peer_id, hdl);
   }
 
   void peer_unavailable(const network_info& addr) {
+    BROKER_TRACE(BROKER_ARG(addr));
     auto self = super::self();
     emit({}, addr, ec::peer_unavailable, "unable to connect to remote peer");
   }
 
   template <class T>
   void cannot_remove_peer(const T& x) {
+    BROKER_TRACE(BROKER_ARG(x));
     emit(x, ec::peer_invalid, "cannot unpeer from unknown peer");
     super::cannot_remove_peer(x);
   }
 
   void disable_notifications() {
+    BROKER_TRACE("");
     errors_ = caf::group{};
     statuses_ = caf::group{};
   }
@@ -95,16 +108,16 @@ private:
   }
 
   template <class Enum>
-  void emit(const peer_id_type& remote_id, const network_info& x, Enum code,
+  void emit(const peer_id_type& peer_id, const network_info& x, Enum code,
             const char* msg) {
     BROKER_INFO("emit:" << code << x);
     auto self = super::self();
     if constexpr (std::is_same<Enum, sc>::value)
       self->send(statuses_, atom::local::value,
-                 status::make(code, endpoint_info{remote_id, x}, msg));
+                 status::make(code, endpoint_info{peer_id, x}, msg));
     else
       self->send(errors_, atom::local::value,
-                 make_error(code, endpoint_info{remote_id, x}, msg));
+                 make_error(code, endpoint_info{peer_id, x}, msg));
   }
 
   template <class Enum>
@@ -143,11 +156,11 @@ private:
   }
 
   template <class Enum>
-  void emit(const peer_id_type& remote_id, Enum code, const char* msg) {
-    auto on_cache_hit = [=](network_info x) { emit(remote_id, x, code, msg); };
-    auto on_cache_miss = [=](caf::error) { emit(remote_id, {}, code, msg); };
+  void emit(const peer_id_type& peer_id, Enum code, const char* msg) {
+    auto on_cache_hit = [=](network_info x) { emit(peer_id, x, code, msg); };
+    auto on_cache_miss = [=](caf::error) { emit(peer_id, {}, code, msg); };
     auto& tbl = dref().tbl();
-    if (auto i = tbl.find(remote_id); i != tbl.end()) {
+    if (auto i = tbl.find(peer_id); i != tbl.end()) {
       dref().cache().fetch(i->second.hdl, on_cache_hit, on_cache_miss);
     } else {
       on_cache_miss({});

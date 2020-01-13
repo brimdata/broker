@@ -271,8 +271,7 @@ public:
     using value_type = std::pair<handle_type, peer_id_list>;
     std::map<peer_id_type, value_type> buckets;
     for (auto& kvp : tbl_)
-      buckets.emplace(kvp.first,
-                      std::pair(kvp.second.hdl, peer_id_list{}));
+      buckets.emplace(kvp.first, std::pair(kvp.second.hdl, peer_id_list{}));
     auto get_bucket = [&](const peer_id_type& x) -> peer_id_list* {
       // Check for direct connection.
       auto i = buckets.find(x);
@@ -320,7 +319,7 @@ public:
   /// Forwards `msg` to `receiver`.
   void ship(data_message& data_msg, const peer_id_type& receiver) {
     // Prepare node message.
-      message_type msg{std::move(data_msg), ttl_, {receiver}};
+    message_type msg{std::move(data_msg), ttl_, {receiver}};
     // Check for direct connection.
     if (auto i = tbl_.find(receiver); i != tbl_.end()) {
       dref().send(i->second.hdl, atom::publish::value, std::move(msg));
@@ -360,39 +359,41 @@ public:
   }
 
   /// Called whenever this peer established a new connection.
-  /// @param remote_id ID of the newly connected peer.
+  /// @param peer_id ID of the newly connected peer.
   /// @param hdl Communication handle for exchanging messages with the new peer.
   /// @note The new peer gets stored in the routing table *before* calling this
   ///       member function.
-  void peer_connected([[maybe_unused]] const peer_id_type& remote_id,
+  void peer_connected([[maybe_unused]] const peer_id_type& peer_id,
                       [[maybe_unused]] const communication_handle_type& hdl) {
     // nop
   }
 
   /// Called whenever this peer lost a connection to a remote peer.
-  /// @param remote_id ID of the disconnected peer.
+  /// @param peer_id ID of the disconnected peer.
   /// @param hdl Communication handle of the disconnected peer.
   /// @param reason None if we closed the connection gracefully, otherwise
   ///               contains the transport-specific error code.
-  void peer_disconnected([[maybe_unused]] const peer_id_type& remote_id,
+  void peer_disconnected([[maybe_unused]] const peer_id_type& peer_id,
                          [[maybe_unused]] const communication_handle_type& hdl,
                          [[maybe_unused]] const error& reason) {
+    BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl) << BROKER_ARG(reason));
     // Do the same cleanup steps we do for removed peers. We intentionally do
     // *not* dispatch through dref() to not trigger undesired side effects.
-    peer_removed(remote_id, hdl);
+    peer_removed(peer_id, hdl);
   }
 
   /// Called whenever this peer removed a connection to a remote peer.
-  /// @param remote_id ID of the removed peer.
+  /// @param peer_id ID of the removed peer.
   /// @param hdl Communication handle of the removed peer.
-  void peer_removed([[maybe_unused]] const peer_id_type& remote_id,
+  void peer_removed([[maybe_unused]] const peer_id_type& peer_id,
                     [[maybe_unused]] const communication_handle_type& hdl) {
-    tbl_.erase(remote_id);
-    if (distance_to(remote_id) == nil) {
+    BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
+    tbl_.erase(peer_id);
+    if (distance_to(peer_id) == nil) {
       auto& subs = peer_subscriptions_;
       for (auto i = subs.begin(); i != subs.end();) {
         auto& lst = i->second;
-        lst.erase(std::remove(lst.begin(), lst.end(), remote_id), lst.end());
+        lst.erase(std::remove(lst.begin(), lst.end(), peer_id), lst.end());
         if (lst.empty())
           i = subs.erase(i);
         else
@@ -435,7 +436,7 @@ public:
         // ALM setting, but that would change the semantics of
         // endpoint::peer_subscriptions.
         auto is_direct_peer = [this](const auto& peer_id) {
-          return tbl_.count(peer_id)!=0;
+          return tbl_.count(peer_id) != 0;
         };
         filter_type result;
         for (const auto& [x, subs] : peer_subscriptions_)

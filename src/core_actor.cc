@@ -27,7 +27,14 @@ caf::behavior core_actor(core_actor_type* self, filter_type initial_filter,
   auto& mgr = self->state.mgr;
   mgr = caf::make_counted<core_manager>(clock, self);
   mgr->subscribe(initial_filter);
-  mgr->cache().set_use_ssl(! options.disable_ssl);
+  mgr->cache().set_use_ssl(not options.disable_ssl);
+  self->set_exit_handler([self](caf::exit_msg& msg) {
+    if (msg.reason) {
+      BROKER_DEBUG("shutting down after receiving an exit message with reason:"
+                   << msg.reason);
+      self->quit(std::move(msg.reason));
+    }
+  });
   return mgr->make_behavior();
 }
 

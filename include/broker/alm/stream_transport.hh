@@ -432,11 +432,6 @@ public:
     super::peer_connected(remote_id, hdl);
   }
 
-  void peer_disconnected(const peer_id_type& remote_id, const caf::actor& hdl,
-                         const error& reason) {
-    super::peer_disconnected(remote_id, hdl, reason);
-  }
-
   // -- overridden member functions of caf::stream_manager ---------------------
 
   void handle(caf::inbound_path* path,
@@ -701,9 +696,13 @@ protected:
         BROKER_DEBUG("closed inbound path to unknown peer");
         return;
       }
-      error err = ec::peer_disconnect_during_handshake;
-      for (auto& promise : i->second.promises)
-        promise.deliver(err);
+      BROKER_DEBUG("lost peer during handshake:" << hdl);
+      if (!i->second.promises.empty()) {
+        BROKER_DEBUG("deliver" << i->second.promises.size() << "promises");
+        error err = ec::peer_disconnect_during_handshake;
+        for (auto& promise : i->second.promises)
+          promise.deliver(err);
+      }
       pending_connections_.erase(i);
       return;
     }

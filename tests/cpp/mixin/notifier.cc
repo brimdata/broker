@@ -64,6 +64,7 @@ private:
 };
 
 struct stream_peer_actor_state {
+  static inline const char* name = "stream_peer_actor";
   caf::intrusive_ptr<stream_peer_manager> mgr;
   bool connected_to(const caf::actor& hdl) const noexcept {
     return mgr->connected_to(hdl);
@@ -80,6 +81,7 @@ caf::behavior stream_peer_actor(stream_peer_actor_type* self, caf::node_id id) {
 }
 
 struct subscriber_state {
+  static inline const char* name = "subscriber";
   std::vector<std::string> log;
 };
 
@@ -98,12 +100,12 @@ struct fixture : test_coordinator_fixture<> {
   using peer_ids = std::vector<peer_id>;
 
   auto make_id(caf::string_view str) {
-    return caf::make_node_id(unbox(caf::make_uri("test:a")));
+    return caf::make_node_id(unbox(caf::make_uri(str)));
   }
 
   fixture() {
-    auto id_a = make_id("test:a");
-    auto id_b = make_id("test:a");
+    id_a = make_id("test:a");
+    id_b = make_id("test:b");
     for (auto& id : peer_ids{id_a, id_b})
       peers[id] = sys.spawn(stream_peer_actor, id);
     auto& groups = sys.groups();

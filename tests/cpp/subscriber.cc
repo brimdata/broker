@@ -55,19 +55,44 @@ void driver(event_based_actor* self, const actor& sink) {
     [](const buf_type& xs) { return xs.empty(); });
 }
 
+struct fixture : base_fixture {
+  // Returns the core manager for given actor.
+  auto& mgr(caf::actor hdl) {
+    return *deref<core_actor_type>(hdl).state.mgr;
+  }
+
+  fixture() {
+    broker_options options;
+    options.disable_ssl = true;
+    core1 = sys.spawn(core_actor, filter_type{"a", "b", "c"}, options, nullptr);
+    core2 = ep.core();
+    anon_send(core1, atom::no_events::value);
+    anon_send(core2, atom::no_events::value);
+    run();
+    core1_id = caf::make_node_id(unbox(caf::make_uri("test:core1")));
+    core2_id = caf::make_node_id(unbox(caf::make_uri("test:core2")));
+    mgr(core1).id(core1_id);
+    mgr(core2).id(core2_id);
+  }
+
+  ~fixture() {
+    anon_send_exit(core1, exit_reason::user_shutdown);
+    anon_send_exit(core2, exit_reason::user_shutdown);
+  }
+
+  caf::node_id core1_id;
+  caf::node_id core2_id;
+  caf::actor core1;
+  caf::actor core2;
+};
+
 } // namespace <anonymous>
 
-CAF_TEST_FIXTURE_SCOPE(subscriber_tests, base_fixture)
+CAF_TEST_FIXTURE_SCOPE(subscriber_tests, fixture)
 
 CAF_TEST(blocking_subscriber) {
-  // Spawn/get/configure core actors.
-  broker_options options;
-  options.disable_ssl = true;
-  auto core1 = sys.spawn(core_actor, filter_type{"a", "b", "c"}, options, nullptr);
-  auto core2 = ep.core();
   anon_send(core2, atom::subscribe::value, filter_type{"a", "b", "c"});
-  anon_send(core1, atom::no_events::value);
-  anon_send(core2, atom::no_events::value);
+  self->send(core1, atom::peer::value, core2_id, core2);
   run();
   // Connect a consumer (leaf) to core2.
   // auto leaf = sys.spawn(consumer, filter_type{"b"}, core2);
@@ -78,7 +103,6 @@ CAF_TEST(blocking_subscriber) {
   CAF_MESSAGE("core2: " << to_string(core2));
   CAF_MESSAGE("leaf: " << to_string(leaf));
   // Initiate handshake between core1 and core2.
-  self->send(core1, atom::peer::value, core2);
   run();
   // Spin up driver on core1.
   auto d1 = sys.spawn(driver, core1);
@@ -89,24 +113,11 @@ CAF_TEST(blocking_subscriber) {
   auto expected = data_msgs({{"b", true}, {"b", false},
                              {"b", true}, {"b", false}});
   CAF_CHECK_EQUAL(sub.poll(), expected);
-  // Shutdown.
-  CAF_MESSAGE("Shutdown core actors.");
-  anon_send_exit(core1, exit_reason::user_shutdown);
-  anon_send_exit(core2, exit_reason::user_shutdown);
-  anon_send_exit(leaf, exit_reason::user_shutdown);
-  anon_send_exit(d1, exit_reason::user_shutdown);
 }
 
 CAF_TEST(nonblocking_subscriber) {
-  // Spawn/get/configure core actors.
-  broker_options options;
-  options.disable_ssl = true;
-  auto core1 = sys.spawn(core_actor, filter_type{"a", "b", "c"}, options, nullptr);
-  auto core2 = ep.core();
-  anon_send(core1, atom::no_events::value);
-  anon_send(core2, atom::no_events::value);
   anon_send(core2, atom::subscribe::value, filter_type{"a", "b", "c"});
-  self->send(core1, atom::peer::value, core2);
+  self->send(core1, atom::peer::value, core2_id, core2);
   run();
   // Connect a subscriber (leaf) to core2.
   using buf = std::vector<data_message>;
@@ -130,10 +141,6 @@ CAF_TEST(nonblocking_subscriber) {
   auto expected = data_msgs({{"b", true}, {"b", false},
                              {"b", true}, {"b", false}});
   CAF_REQUIRE_EQUAL(result, expected);
-  // Shutdown.
-  CAF_MESSAGE("Shutdown core actors.");
-  anon_send_exit(core1, exit_reason::user_shutdown);
-  anon_send_exit(core2, exit_reason::user_shutdown);
 }
 
 CAF_TEST_FIXTURE_SCOPE_END()

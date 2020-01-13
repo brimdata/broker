@@ -447,8 +447,14 @@ public:
       [=](atom::shutdown) {
         // TODO: this handler exists only for backwards-compatibility. Consider
         //       simply using CAF's exit messages instead of using this
-        //       anti-pattern.
+        //       anti pattern.
         dref().self()->quit(caf::exit_reason::user_shutdown);
+      },
+      [=](atom::publish, atom::local, command_message& msg) {
+        dref().ship_locally(msg);
+      },
+      [=](atom::publish, atom::local, data_message& msg) {
+        dref().ship_locally(msg);
       },
     };
   }

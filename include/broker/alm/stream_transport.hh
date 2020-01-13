@@ -296,8 +296,8 @@ public:
   // Establishes a stream from B to A.
   caf::outbound_stream_slot<message_type, caf::actor, peer_id_type, filter_type,
                             uint64_t>
-  handle_peering_request(const caf::actor& hdl, const peer_id_type& remote_id) {
-    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(remote_id));
+  handle_peering_request(const caf::actor& hdl, const peer_id_type& peer_id) {
+    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(peer_id));
     auto& d = dref();
     // Sanity checking.
     if (!hdl) {
@@ -305,13 +305,13 @@ public:
       return {};
     }
     // Check whether there's already a peering relation established or underway.
-    if (dref().tbl().count(remote_id) > 0) {
-      BROKER_DEBUG("drop peering request: already have a direct connection to "
-                   << remote_id);
+    if (dref().tbl().count(peer_id) > 0) {
+      BROKER_DEBUG("drop peering request: already have a direct connection to"
+                   << peer_id);
       return {};
     }
     if (hdl_to_ostream_.count(hdl) > 0 || hdl_to_istream_.count(hdl) > 0) {
-      BROKER_DEBUG("drop peering request: already peering to " << remote_id);
+      BROKER_DEBUG("drop peering request: already peering to " << peer_id);
     }
     // Open output stream (triggers handle_peering_handshake_1 on the remote),
     // sending our subscriptions, timestamp, etc. as handshake data.
@@ -328,10 +328,9 @@ public:
   caf::outbound_stream_slot<message_type, atom::ok, caf::actor, peer_id_type,
                             filter_type, uint64_t>
   handle_peering_handshake_1(caf::stream<message_type> in,
-                             const caf::actor& hdl,
-                             const peer_id_type& remote_id,
+                             const caf::actor& hdl, const peer_id_type& peer_id,
                              const filter_type& topics, uint64_t timestamp) {
-    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(remote_id) << BROKER_ARG(topics)
+    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(peer_id) << BROKER_ARG(topics)
                                  << BROKER_ARG(timestamp));
     auto& d = dref();
     // Sanity checking. At this stage, we must have no direct connection routing
@@ -341,18 +340,18 @@ public:
       return {};
     }
     if (hdl_to_ostream_.count(hdl) != 0 || hdl_to_istream_.count(hdl) != 0) {
-      BROKER_ERROR("drop handshake #1: already have open streams to "
-                   << remote_id);
+      BROKER_ERROR("drop handshake #1: already have open streams to"
+                   << peer_id);
       return {};
     }
     // Add routing table entry for this direct connection.
-    if (!d.tbl().emplace(remote_id, hdl).second) {
-      BROKER_ERROR("drop handshake #1: already have a direct connection to "
-                   << remote_id);
+    if (!d.tbl().emplace(peer_id, hdl).second) {
+      BROKER_ERROR("drop handshake #1: already have a direct connection to"
+                   << peer_id);
       return {};
     }
     // Store subscriptions and announce the new path.
-    std::vector<peer_id_type> path{remote_id};
+    std::vector<peer_id_type> path{peer_id};
     d.handle_subscription(path, topics, timestamp);
     // Add streaming slots for this connection.
     auto data = std::make_tuple(atom::ok::value,
@@ -364,17 +363,16 @@ public:
     auto islot = d.add_unchecked_inbound_path(in);
     hdl_to_ostream_[hdl] = oslot;
     hdl_to_istream_[hdl] = islot;
-    d.peer_connected(remote_id, hdl);
+    d.peer_connected(peer_id, hdl);
     return oslot;
   }
 
   // Acks the stream from A to B.
-  void handle_peering_handshake_2(caf::stream<message_type> in, atom::ok,
-                                  const caf::actor& hdl,
-                                  const peer_id_type& remote_id,
-                                  const filter_type& topics,
-                                  uint64_t timestamp) {
-    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(remote_id));
+  void
+  handle_peering_handshake_2(caf::stream<message_type> in, atom::ok,
+                             const caf::actor& hdl, const peer_id_type& peer_id,
+                             const filter_type& topics, uint64_t timestamp) {
+    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(peer_id));
     auto& d = dref();
     // Sanity checking. At this stage, we must have an open output stream but no
     // input stream yet.
@@ -383,25 +381,25 @@ public:
       return;
     }
     if (hdl_to_ostream_.count(hdl) == 0) {
-      BROKER_ERROR("drop handshake #2: no open output stream to " << remote_id);
+      BROKER_ERROR("drop handshake #2: no open output stream to " << peer_id);
       return;
     }
     if (hdl_to_istream_.count(hdl) != 0) {
-      BROKER_ERROR("drop handshake #2: already have inbound stream from "
-                   << remote_id);
+      BROKER_ERROR("drop handshake #2: already have inbound stream from"
+                   << peer_id);
       return;
     }
     // Add routing table entry for this direct connection.
-    if (!d.tbl().emplace(remote_id, hdl).second) {
-      BROKER_ERROR("drop handshake #1: already have a direct connection to "
-                   << remote_id);
+    if (!d.tbl().emplace(peer_id, hdl).second) {
+      BROKER_ERROR("drop handshake #1: already have a direct connection to"
+                   << peer_id);
       return;
     }
-    d.peer_connected(remote_id, hdl);
+    d.peer_connected(peer_id, hdl);
     // Add inbound streaming slot for this connection.
     hdl_to_istream_[hdl] = d.add_unchecked_inbound_path(in);
     // Store subscriptions and announce the new path.
-    std::vector<peer_id_type> path{remote_id};
+    std::vector<peer_id_type> path{peer_id};
     d.handle_subscription(path, topics, timestamp);
   }
 
@@ -422,14 +420,14 @@ public:
   }
 
   /// Sends `('peer', 'ok', <id>)` to peering listeners.
-  void peer_connected(const peer_id_type& remote_id, const caf::actor& hdl) {
-    auto i = pending_connections_.find(remote_id);
+  void peer_connected(const peer_id_type& peer_id, const caf::actor& hdl) {
+    auto i = pending_connections_.find(peer_id);
     if (i == pending_connections_.end())
       return;
     for (auto& promise : i->second.promises)
-      promise.deliver(atom::peer::value, atom::ok::value, remote_id);
+      promise.deliver(atom::peer::value, atom::ok::value, peer_id);
     pending_connections_.erase(i);
-    super::peer_connected(remote_id, hdl);
+    super::peer_connected(peer_id, hdl);
   }
 
   // -- overridden member functions of caf::stream_manager ---------------------
@@ -586,9 +584,7 @@ public:
       [this](atom::publish, atom::local, data_message msg) {
         worker_manager().push(msg);
       },
-      [this](atom::unpeer, const caf::actor& hdl) {
-        dref().unpeer(hdl);
-      },
+      [this](atom::unpeer, const caf::actor& hdl) { dref().unpeer(hdl); },
       [this](atom::unpeer, const peer_id_type& peer_id) {
         dref().unpeer(peer_id);
       });
@@ -656,16 +652,16 @@ protected:
   /// Disconnects a peer by demand of the user.
   void unpeer(const caf::actor& hdl) {
     BROKER_TRACE(BROKER_ARG(hdl));
-    if (auto remote_id = get_peer_id(super::tbl(), hdl)) {
-      dref().unpeer(*remote_id, hdl);
+    if (auto peer_id = get_peer_id(super::tbl(), hdl)) {
+      dref().unpeer(*peer_id, hdl);
       return;
     }
     auto predicate = [&](const auto& kvp) { return kvp.second.hdl == hdl; };
     if (auto i = std::find_if(pending_connections_.begin(),
                               pending_connections_.end(), predicate);
         i != pending_connections_.end()) {
-      auto remote_id = i->first;
-      dref().unpeer(remote_id, hdl);
+      auto peer_id = i->first;
+      dref().unpeer(peer_id, hdl);
       return;
     }
     dref().cannot_remove_peer(hdl);
@@ -708,9 +704,9 @@ protected:
     }
     // Fetch the node ID from the routing table and invoke callbacks.
     auto& d = dref();
-    if (auto remote_id = get_peer_id(d.tbl(), hdl)) {
+    if (auto peer_id = get_peer_id(d.tbl(), hdl)) {
       // peer::peer_disconnected ultimately removes the entry from the table.
-      d.peer_disconnected(*remote_id, hdl, reason);
+      d.peer_disconnected(*peer_id, hdl, reason);
     } else {
       BROKER_ERROR("closed inbound path to a peer without routing table entry");
     }

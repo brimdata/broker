@@ -69,6 +69,14 @@ public:
 
   void consume_message();
 
+  template <class T = caf::scheduled_actor, class Handle = caf::actor>
+  T& deref(const Handle& hdl) {
+    auto ptr = caf::actor_cast<caf::abstract_actor*>(hdl);
+    if (ptr == nullptr)
+      CAF_FAIL("actor_cast failed");
+    return dynamic_cast<T&>(*ptr);
+  }
+
 private:
   static broker::configuration make_config();
 };

@@ -78,6 +78,10 @@ caf::behavior peer_actor(peer_actor_type* self, endpoint::clock* clock,
 struct fixture : test_coordinator_fixture<> {
   using peer_ids = std::vector<peer_id>;
 
+  auto& get(const peer_id& id) {
+    return *deref<peer_actor_type>(peers[id]).state.mgr;
+  }
+
   fixture() : clock(&sys, true) {
     for (auto& id : peer_ids{"A", "B"})
       peers[id] = sys.spawn(peer_actor, &clock, id);
@@ -90,10 +94,6 @@ struct fixture : test_coordinator_fixture<> {
     for (auto& kvp : peers)
       anon_send_exit(kvp.second, caf::exit_reason::user_shutdown);
     run();
-  }
-
-  auto& get(const peer_id& id) {
-    return *deref<peer_actor_type>(peers[id]).state.mgr;
   }
 
   endpoint::clock clock;

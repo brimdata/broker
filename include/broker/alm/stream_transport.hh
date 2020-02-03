@@ -231,7 +231,7 @@ public:
 
   /// Sends an asynchronous message instead of pushing the data to the stream.
   /// Required for initiating handshakes (because no stream exists at that
-  /// point) or for any other communicaiton that should bypass the stream.
+  /// point) or for any other communication that bypasses the stream.
   template <class... Ts>
   void async_send(const caf::actor& receiver, Ts&&... xs) {
     self()->send(receiver, std::forward<Ts>(xs)...);

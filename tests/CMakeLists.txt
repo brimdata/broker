@@ -7,6 +7,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/cpp)
 # -- C++ ----------------------------------------------------------------------
 
 set(tests
+  cpp/alm/multipath.cc
   cpp/alm/peer.cc
   cpp/backend.cc
   cpp/core_actor.cc

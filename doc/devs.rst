@@ -106,13 +106,16 @@ By flooding the subscriptions in this way, Broker is able to detect all possible
 paths between nodes. However, this mechanism can cause a high volume of messages
 for topologies with many loops that result in a large number of possible paths
 between all nodes. Should we observe severe performance degradations as a result
-of the flooding, Broker could limit the maximum path length or consider only a
-limited set of paths that is as distinct as possible.
+of the flooding, Broker could limit the maximum path length or select only a
+limited set of paths (ideally, this subset should be as distinct as possible).
 
 Publishing Data
 ~~~~~~~~~~~~~~~
 
+Whenever `the core actor`_ receives data from a local publisher, it scans its
+routing table for all nodes subscribed to the topic (prefix matching).
 
+*TODO: implement and discuss source routing.*
 
 Software Architecture
 ---------------------

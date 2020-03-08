@@ -19,4 +19,16 @@ bool filter_extend(filter_type& f, const topic& x);
 /// Convenience function for calling `filter_extend` with each topic in `other`.
 bool filter_extend(filter_type& f, const filter_type& other);
 
+/// Convenience function for calling `filter_extend` with each topic in `other`
+/// that matches `predicate`.
+template <class Predicate>
+bool filter_extend(filter_type& f, const filter_type& other,
+                   Predicate predicate) {
+  size_t count = 0;
+  for (auto& x : other)
+    if (predicate(x) && filter_extend(f, x))
+      ++count;
+  return count > 0;
+}
+
 } // namespace broker

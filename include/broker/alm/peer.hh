@@ -137,8 +137,8 @@ public:
 
   void subscribe(const filter_type& what) {
     BROKER_TRACE(BROKER_ARG(what));
-    // The new topic
-    if (!filter_extend(subscriptions_, what)) {
+    auto not_internal = [](const topic& x) { return !is_internal(x); };
+    if (!filter_extend(subscriptions_, what, not_internal)) {
       BROKER_DEBUG("already subscribed to topic");
       return;
     }

@@ -116,7 +116,6 @@ public:
 };
 
 struct fixture : test_coordinator_fixture<config> {
-
   // Returns the core manager for given actor.
   auto& mgr(caf::actor hdl) {
     return *deref<core_actor_type>(hdl).state.mgr;
@@ -132,6 +131,8 @@ struct fixture : test_coordinator_fixture<config> {
   }
 
   fixture() {
+    // We don't do networking, but our flares use the socket API.
+    base_fixture::init_socket_api();
     using caf::make_uri;
     auto spawn_core = [&](auto id) {
       broker_options opts;
@@ -154,6 +155,7 @@ struct fixture : test_coordinator_fixture<config> {
   ~fixture() {
     for (auto& hdl : {core1, core2, core3})
       anon_send_exit(hdl, caf::exit_reason::user_shutdown);
+    base_fixture::deinit_socket_api();
   }
 
   template <class... Ts>
@@ -170,7 +172,7 @@ static constexpr bool T = true;
 
 static constexpr bool F = false;
 
-} // namespace <anonymous>
+} // namespace
 
 FIXTURE_SCOPE(local_tests, fixture)
 
@@ -316,14 +318,15 @@ struct error_signaling_fixture : base_fixture {
   status_subscriber es;
 
   error_signaling_fixture() : es(ep.make_status_subscriber(true)) {
+    es.set_rate_calculation(false);
     core1 = ep.core();
     CAF_MESSAGE(BROKER_ARG(core1));
     anon_send(core1, atom::subscribe::value, filter_type{"a", "b", "c"});
     core2 = sys.spawn(core_actor, filter_type{"a", "b", "c"},
                       ep.config().options(), nullptr);
     CAF_MESSAGE(BROKER_ARG(core2));
-    anon_send(core2, atom::no_events::value);
     run();
+    CAF_MESSAGE("init done");
   }
 };
 

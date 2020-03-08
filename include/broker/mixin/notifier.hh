@@ -4,12 +4,15 @@
 #include <caf/group.hpp>
 
 #include "broker/atoms.hh"
+#include "broker/data.hh"
 #include "broker/detail/assert.hh"
 #include "broker/detail/lift.hh"
 #include "broker/endpoint_info.hh"
 #include "broker/error.hh"
 #include "broker/logger.hh"
+#include "broker/message.hh"
 #include "broker/status.hh"
+#include "broker/topic.hh"
 
 namespace broker::mixin {
 
@@ -32,9 +35,7 @@ public:
 
   template <class... Ts>
   explicit notifier(Ts&&... xs) : super(std::forward<Ts>(xs)...) {
-    auto& groups = super::self()->system().groups();
-    errors_ = groups.get_local("broker/errors");
-    statuses_ = groups.get_local("broker/statuses");
+    // nop
   }
 
   void peer_connected(const peer_id_type& peer_id,
@@ -81,8 +82,7 @@ public:
 
   void disable_notifications() {
     BROKER_TRACE("");
-    errors_ = caf::group{};
-    statuses_ = caf::group{};
+    disable_notifications_ = true;
   }
 
   template <class... Fs>
@@ -107,29 +107,37 @@ private:
     return *static_cast<Subtype*>(this);
   }
 
+  void emit(const status& stat) {
+    auto dmsg = make_data_message(topics::statuses, get_as<data>(stat));
+    dref().ship_locally(std::move(dmsg));
+  }
+
+  void emit(const error& err) {
+    auto dmsg = make_data_message(topics::errors, get_as<data>(err));
+    dref().ship_locally(std::move(dmsg));
+  }
+
   template <class Enum>
   void emit(const peer_id_type& peer_id, const network_info& x, Enum code,
             const char* msg) {
     BROKER_INFO("emit:" << code << x);
-    auto self = super::self();
+    if (disable_notifications_)
+      return;
     if constexpr (std::is_same<Enum, sc>::value)
-      self->send(statuses_, atom::local::value,
-                 status::make(code, endpoint_info{peer_id, x}, msg));
+      emit(status::make(code, endpoint_info{peer_id, x}, msg));
     else
-      self->send(errors_, atom::local::value,
-                 make_error(code, endpoint_info{peer_id, x}, msg));
+      emit(make_error(code, endpoint_info{peer_id, x}, msg));
   }
 
   template <class Enum>
   void emit(const network_info& x, Enum code, const char* msg) {
     BROKER_INFO("emit:" << code << x);
-    auto self = super::self();
+    if (disable_notifications_)
+      return;
     if constexpr (std::is_same<Enum, sc>::value)
-      self->send(statuses_, atom::local::value,
-                 status::make(code, endpoint_info{{}, x}, msg));
+      emit(status::make(code, endpoint_info{{}, x}, msg));
     else
-      self->send(errors_, atom::local::value,
-                 make_error(code, endpoint_info{{}, x}, msg));
+      emit(make_error(code, endpoint_info{{}, x}, msg));
   }
 
   /// Reports an error to all status subscribers.
@@ -167,11 +175,7 @@ private:
     }
   }
 
-  /// Caches the CAF group for error messages.
-  caf::group errors_;
-
-  /// Caches the CAF group for status messages.
-  caf::group statuses_;
+  bool disable_notifications_ = false;
 };
 
 } // namespace broker::mixin

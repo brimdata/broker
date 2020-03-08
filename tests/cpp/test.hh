@@ -77,6 +77,10 @@ public:
     return dynamic_cast<T&>(*ptr);
   }
 
+  static void init_socket_api();
+
+  static void deinit_socket_api();
+
 private:
   static broker::configuration make_config();
 };

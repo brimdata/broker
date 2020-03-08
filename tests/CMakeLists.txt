@@ -16,6 +16,7 @@ set(tests
   cpp/detail/generator_file_writer.cc
   cpp/detail/meta_command_writer.cc
   cpp/detail/meta_data_writer.cc
+  cpp/error.cc
   cpp/filter_type.cc
   cpp/integration.cc
   cpp/master.cc
@@ -25,6 +26,7 @@ set(tests
   cpp/publisher.cc
   cpp/radix_tree.cc
   cpp/ssl.cc
+  cpp/status.cc
   cpp/status_subscriber.cc
   cpp/store.cc
   cpp/subscriber.cc

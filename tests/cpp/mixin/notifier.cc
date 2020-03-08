@@ -58,6 +58,21 @@ public:
     return cache_;
   }
 
+  using super::ship_locally;
+
+  void ship_locally(const data_message& msg) {
+    if (is_internal(get_topic(msg)))
+    {
+      if (auto status = status_view::make(get_data(msg)))
+        log.emplace_back(to_string(status.code()));
+      else if (auto err = error_view::make(get_data(msg)))
+        log.emplace_back(to_string(err.code()));
+    }
+    super::ship_locally(msg);
+  }
+
+  std::vector<std::string> log;
+
 private:
   caf::node_id id_;
   dummy_cache cache_;
@@ -68,6 +83,9 @@ struct stream_peer_actor_state {
   caf::intrusive_ptr<stream_peer_manager> mgr;
   bool connected_to(const caf::actor& hdl) const noexcept {
     return mgr->connected_to(hdl);
+  }
+  const auto& log() const noexcept {
+    return mgr->log;
   }
 };
 
@@ -108,10 +126,6 @@ struct fixture : test_coordinator_fixture<> {
     id_b = make_id("test:b");
     for (auto& id : peer_ids{id_a, id_b})
       peers[id] = sys.spawn(stream_peer_actor, id);
-    auto& groups = sys.groups();
-    logger = sys.spawn_in_groups({groups.get_local("broker/errors"),
-                                  groups.get_local("broker/statuses")},
-                                 subscriber, peers[id_a]);
     run();
   }
 
@@ -125,8 +139,8 @@ struct fixture : test_coordinator_fixture<> {
     return deref<stream_peer_actor_type>(peers[id]).state;
   }
 
-  auto& log() {
-    return deref<subscriber_type>(logger).state.log;
+  auto& log(const peer_id& id) {
+    return get(id).log();
   }
 
   template <class... Ts>
@@ -150,19 +164,19 @@ FIXTURE_SCOPE(notifier_tests, fixture)
 TEST(connect and graceful disconnect emits peer_added and peer_lost) {
   anon_send(peers[id_a], atom::peer::value, id_b, peers[id_b]);
   run();
-  CHECK_EQUAL(log(), make_log("peer_added"));
+  CHECK_EQUAL(log(id_a), make_log("peer_added"));
   anon_send_exit(peers[id_b], caf::exit_reason::user_shutdown);
   run();
-  CHECK_EQUAL(log(), make_log("peer_added", "peer_lost"));
+  CHECK_EQUAL(log(id_a), make_log("peer_added", "peer_lost"));
 }
 
 TEST(connect and ungraceful disconnect emits peer_added and peer_lost) {
   anon_send(peers[id_a], atom::peer::value, id_b, peers[id_b]);
   run();
-  CHECK_EQUAL(log(), make_log("peer_added"));
+  CHECK_EQUAL(log(id_a), make_log("peer_added"));
   anon_send_exit(peers[id_b], caf::exit_reason::kill);
   run();
-  CHECK_EQUAL(log(), make_log("peer_added", "peer_lost"));
+  CHECK_EQUAL(log(id_a), make_log("peer_added", "peer_lost"));
 }
 
 FIXTURE_SCOPE_END()

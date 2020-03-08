@@ -8,6 +8,8 @@
 #include "caf/meta/omittable_if_empty.hpp"
 #include "caf/meta/type_name.hpp"
 
+#include "broker/detail/assert.hh"
+
 namespace broker::alm {
 
 /// Helper class for giving multipath children an STL-like interface.
@@ -77,6 +79,15 @@ public:
     // nop
   }
 
+  /// Constructs a multipath from the linear path `[first, last)`.
+  /// @pre `first != last`
+  template <class Iterator>
+  explicit multipath(Iterator first, Iterator last) : id_(*first) {
+    auto pos = this;
+    for (++first; first != last; ++first)
+      pos = pos->emplace_node(*first).first;
+  }
+
   multipath(multipath&& other) noexcept(nothrow_move)
     : id_(std::move(other.id_)),
       nodes_(nullptr),
@@ -86,12 +97,26 @@ public:
     swap(nodes_, other.nodes_);
   }
 
+  multipath(const multipath& other) {
+    *this = other;
+  }
+
   multipath& operator=(multipath&& other) noexcept(nothrow_assign) {
     using std::swap;
     swap(id_, other.id_);
     swap(nodes_, other.nodes_);
     size_ = other.size_;
     reserved_ = other.reserved_;
+    return *this;
+  }
+
+  multipath& operator=(const multipath& other) {
+    size_ = 0;
+    id_ = other.id_;
+    for (const auto& node : other.nodes()) {
+      auto& child = *emplace_node(node.id()).first;
+      child = node;
+    }
     return *this;
   }
 
@@ -144,6 +169,30 @@ public:
     }
   }
 
+  template <class Iterator>
+  bool splice(Iterator first, Iterator last) {
+    if (first == last)
+      return true;
+    if (*first != id_)
+      return false;
+    if (++first == last)
+      return true;
+    auto child = emplace_node(*first).first;
+    if (++first == last)
+      return true;
+    child->splice_cont(first, last);
+    return true;
+  }
+
+  bool equals(const multipath& other) const noexcept {
+    auto is_equal = [](const multipath& x, const multipath& y) {
+      return x.equals(y);
+    };
+    return id_ == other.id_
+           && std::equal(nodes_begin(), nodes_end(), other.nodes_begin(),
+                         other.nodes_end(), is_equal);
+  }
+
   template <class Inspector>
   friend auto inspect(Inspector& f, multipath& x) {
     return f(
@@ -151,6 +200,16 @@ public:
   }
 
 private:
+  // Recursively splices a linear path into a multipath.
+  template <class Iterator>
+  void splice_cont(Iterator first, Iterator last) {
+    BROKER_ASSERT(first != last);
+    auto child = emplace_node(*first).first;
+    if (++first != last)
+      child->splice_cont(first, last);
+  }
+
+
   iterator append(PeerId&& id) {
     grow_if_needed();
     auto ptr = nodes_ + size_;
@@ -197,5 +256,17 @@ private:
   /// Reserved capacity for `nodes_`.
   size_t reserved_ = 0;
 };
+
+/// @relates multipath
+template <class PeerId>
+bool operator==(const multipath<PeerId>& x, const multipath<PeerId>& y) {
+  return x.equals(y);
+}
+
+/// @relates multipath
+template <class PeerId>
+bool operator!=(const multipath<PeerId>& x, const multipath<PeerId>& y) {
+  return !(x == y);
+}
 
 } // namespace broker::alm

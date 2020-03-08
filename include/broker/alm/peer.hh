@@ -478,7 +478,7 @@ private:
   std::unordered_map<peer_id_type, uint64_t> peer_timestamps_;
 
   /// Stores subscriptions from local subscribers.
-  std::vector<topic> subscriptions_;
+  filter_type subscriptions_;
 
   /// Stores all subscriptions from other peers.
   std::map<topic, peer_id_list> peer_subscriptions_;

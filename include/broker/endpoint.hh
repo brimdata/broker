@@ -22,6 +22,7 @@
 #include "broker/configuration.hh"
 #include "broker/endpoint_info.hh"
 #include "broker/expected.hh"
+#include "broker/filter_type.hh"
 #include "broker/frontend.hh"
 #include "broker/fwd.hh"
 #include "broker/message.hh"
@@ -177,8 +178,9 @@ public:
   /// @returns A pointer to the list
   std::vector<peer_info> peers() const;
 
-  /// Retrieves a list of topics that peers have subscribed to on this endpoint.
-  std::vector<topic> peer_subscriptions() const;
+  /// Retrieves a filter for matching events that are forwarded to one or more
+  /// peers.
+  filter_type peer_subscriptions() const;
 
   // --- publishing ------------------------------------------------------------
 
@@ -250,24 +252,24 @@ public:
 
   // --- forwarding events -----------------------------------------------------
 
-  // Forward remote events for given topics even if no local subscriber.
-  void forward(std::vector<topic> ts);
+  /// Forward remote events for given filter even if no local subscribers exist.
+  void forward(filter_type filter);
 
   // --- subscribing data ------------------------------------------------------
 
-  /// Returns a subscriber connected to this endpoint for the topics `ts`.
-  subscriber make_subscriber(std::vector<topic> ts, size_t max_qsize = 20u);
+  /// Returns a subscriber that receives all events matching given filter.
+  subscriber make_subscriber(filter_type filter, size_t max_qsize = 20u);
 
   /// Starts a background worker from the given set of function that consumes
   /// incoming messages. The worker will run in the background, but `init` is
   /// guaranteed to be called before the function returns.
   template <class Init, class HandleMessage, class Cleanup>
-  caf::actor subscribe(std::vector<topic> topics, Init init, HandleMessage f,
+  caf::actor subscribe(filter_type filter, Init init, HandleMessage f,
                        Cleanup cleanup) {
     std::mutex mx;
     std::condition_variable cv;
     auto res = make_actor([=,&mx,&cv](caf::event_based_actor* self) {
-      self->send(self * core(), atom::join::value, std::move(topics));
+      self->send(self * core(), atom::join::value, std::move(filter));
       self->become(
         [=](const stream_type& in) {
           self->make_sink(in, init, f, cleanup);
@@ -285,10 +287,10 @@ public:
   /// Identical to ::subscribe, but does not guarantee that `init` is called
   /// before the function returns.
   template <class Init, class HandleMessage, class Cleanup>
-  caf::actor subscribe_nosync(std::vector<topic> topics, Init init,
+  caf::actor subscribe_nosync(filter_type filter, Init init,
                               HandleMessage f, Cleanup cleanup) {
     return make_actor([=](caf::event_based_actor* self) {
-      self->send(self * core(), atom::join::value, std::move(topics));
+      self->send(self * core(), atom::join::value, std::move(filter));
       self->become(
         [=](const stream_type& in) {
           self->make_sink(in, init, f, cleanup);

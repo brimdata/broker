@@ -29,7 +29,7 @@ public:
                   << remote_peer);
       return;
     }
-    send(hdl, atom::peer::value, d.id(), d.subscriptions(), d.timestamp());
+    send(hdl, atom::peer::value, d.id(), d.filter(), d.timestamp());
   }
 
   /// Starts the handshake process for a new peering (step #1 in core_actor.cc).
@@ -38,33 +38,33 @@ public:
   /// @param send_own_filter Sends a `(filter, self)` handshake if `true`,
   ///                        `('ok', self)` otherwise.
   /// @pre `current_sender() != nullptr`
-  auto handle_peering(const peer_id_type& remote_id,
-                      const std::vector<topic>& topics, uint64_t timestamp) {
+  auto handle_peering(const peer_id_type& remote_id, const filter_type& filter,
+                      uint64_t timestamp) {
     BROKER_TRACE(BROKER_ARG(remote_id));
     // Check whether we already send outbound traffic to the peer. Could use
-    // `CAF_ASSERT` instead, because this must'nt get called for known peers.
+    // `BROKER_ASSERT` instead, because this mustn't get called for known peers.
     auto& d = dref();
     auto src = caf::actor_cast<caf::actor>(d.self()->current_sender());
     if (!d.tbl().emplace(remote_id, src).second)
       BROKER_INFO("received repeated peering request");
-    // Propagate subscription to peers.
+    // Propagate filter to peers.
     std::vector<peer_id_type> path{remote_id};
-    d.handle_subscription(path, topics, timestamp);
-    // Reply with our own subscriptions.
+    d.handle_subscription(path, filter, timestamp);
+    // Reply with our own filter.
     return caf::make_message(atom::peer::value, atom::ok::value, d.id(),
-                             d.subscriptions(), d.timestamp());
+                             d.filter(), d.timestamp());
   }
 
   auto handle_peering_response(const peer_id_type& remote_id,
-                               const std::vector<topic>& topics,
+                               const filter_type& filter,
                                uint64_t timestamp) {
     auto& d = dref();
     auto src = caf::actor_cast<caf::actor>(d.self()->current_sender());
     if (!d.tbl().emplace(remote_id, src).second)
       BROKER_INFO("received repeated peering response");
-    // Propagate subscription to peers.
+    // Propagate filter to peers.
     std::vector<peer_id_type> path{remote_id};
-    d.handle_subscription(path, topics, timestamp);
+    d.handle_subscription(path, filter, timestamp);
   }
 
   template <class... Ts>

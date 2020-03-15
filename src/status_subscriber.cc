@@ -40,12 +40,12 @@ namespace broker {
 
 namespace {
 
-std::vector<topic> make_status_topics(bool receive_statuses) {
-  std::vector<topic> result;
+filter_type make_status_filter(bool receive_statuses) {
+  filter_type result;
   result.reserve(2);
-  result.emplace_back(topics::errors);
+  filter_extend(result, topics::errors);
   if (receive_statuses)
-    result.emplace_back(topics::statuses);
+    filter_extend(result, topics::statuses);
   return result;
 }
 
@@ -54,7 +54,7 @@ using value_type = status_subscriber::value_type;
 } // namespace
 
 status_subscriber::status_subscriber(endpoint& ep, bool receive_statuses)
-  : impl_(ep, make_status_topics(receive_statuses),
+  : impl_(ep, make_status_filter(receive_statuses),
           std::numeric_limits<long>::max()) {
   // nop
 }

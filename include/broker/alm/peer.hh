@@ -80,18 +80,18 @@ public:
     return tbl_;
   }
 
-  const auto& subscriptions() const noexcept {
-    return subscriptions_;
+  const auto& filter() const noexcept {
+    return filter_;
   }
 
-  const auto& peer_subscriptions() const noexcept {
-    return peer_subscriptions_;
+  const auto& peer_filters() const noexcept {
+    return peer_filters_;
   }
 
-  auto peer_subscriptions(const peer_id_type& x) const {
+  auto peer_filter(const peer_id_type& x) const {
     auto predicate = [&](const auto& y) { return x == y; };
     filter_type result;
-    for (const auto& kvp : peer_subscriptions_)
+    for (const auto& kvp : peer_filters_)
       if (std::any_of(kvp.second.begin(), kvp.second.end(), predicate))
         result.emplace_back(kvp.first);
     return result;
@@ -138,26 +138,26 @@ public:
   void subscribe(const filter_type& what) {
     BROKER_TRACE(BROKER_ARG(what));
     auto not_internal = [](const topic& x) { return !is_internal(x); };
-    if (!filter_extend(subscriptions_, what, not_internal)) {
+    if (!filter_extend(filter_, what, not_internal)) {
       BROKER_DEBUG("already subscribed to topic");
       return;
     }
     ++timestamp_;
     peer_id_list path{dref().id()};
     for (auto& kvp : tbl_)
-      dref().send(kvp.second.hdl, atom::subscribe::value, path, subscriptions_,
+      dref().send(kvp.second.hdl, atom::subscribe::value, path, filter_,
                   timestamp_);
   }
 
   template <class T>
   void publish(const T& content) {
-    auto& topic = get_topic(content);
+    const auto& topic = get_topic(content);
     peer_id_list receivers;
-    for (auto& kvp : peer_subscriptions_)
-      if (kvp.first.prefix_of(topic))
-        receivers.insert(receivers.end(), kvp.second.begin(), kvp.second.end());
+    for (const auto& [prefix, peers] : peer_filters_)
+      if (prefix.prefix_of(topic))
+        receivers.insert(receivers.end(), peers.begin(), peers.end());
     if (receivers.empty()) {
-      BROKER_DEBUG("no subscribers found for topic");
+      BROKER_DEBUG("no subscribers found for topic" << topic);
       return;
     }
     message_type msg{content, ttl_, std::move(receivers)};
@@ -232,12 +232,12 @@ public:
     auto& ts = peer_timestamps_[subscriber];
     if (ts < timestamp) {
       // TODO: we can do this more efficient.
-      for (auto& kvp : peer_subscriptions_) {
+      for (auto& kvp : peer_filters_) {
         auto& vec = kvp.second;
         vec.erase(std::remove(vec.begin(), vec.end(), subscriber), vec.end());
       }
       for (auto& x : filter)
-        peer_subscriptions_[x].emplace_back(subscriber);
+        peer_filters_[x].emplace_back(subscriber);
       ts = timestamp;
     }
   }
@@ -390,7 +390,7 @@ public:
     BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
     tbl_.erase(peer_id);
     if (distance_to(peer_id) == nil) {
-      auto& subs = peer_subscriptions_;
+      auto& subs = peer_filters_;
       for (auto i = subs.begin(); i != subs.end();) {
         auto& lst = i->second;
         lst.erase(std::remove(lst.begin(), lst.end(), peer_id), lst.end());
@@ -431,17 +431,17 @@ public:
       lift<atom::subscribe>(d, &Derived::handle_subscription),
       [=](atom::get, atom::id) { return dref().id(); },
       [=](atom::get, atom::peer, atom::subscriptions) {
-        // For backwards-compatibility, we only report the subscriptions of our
-        // direct peers. Returning all subscriptions would make more sense in an
+        // For backwards-compatibility, we only report the filter of our
+        // direct peers. Returning all filter would make more sense in an
         // ALM setting, but that would change the semantics of
-        // endpoint::peer_subscriptions.
+        // endpoint::peer_filter.
         auto is_direct_peer = [this](const auto& peer_id) {
           return tbl_.count(peer_id) != 0;
         };
         filter_type result;
-        for (const auto& [x, subs] : peer_subscriptions_)
-          if (std::any_of(subs.begin(), subs.end(), is_direct_peer))
-            filter_extend(result, x);
+        for (const auto& [prefix, peers] : peer_filters_)
+          if (std::any_of(peers.begin(), peers.end(), is_direct_peer))
+            filter_extend(result, prefix);
         return result;
       },
       [=](atom::shutdown) {
@@ -475,13 +475,14 @@ private:
   /// A logical timestamp.
   uint64_t timestamp_ = 0;
 
+  /// Keeps track of the logical timestamps last seen from other peers.
   std::unordered_map<peer_id_type, uint64_t> peer_timestamps_;
 
-  /// Stores subscriptions from local subscribers.
-  filter_type subscriptions_;
+  /// Stores prefixes with subscribers on this peer.
+  filter_type filter_;
 
-  /// Stores all subscriptions from other peers.
-  std::map<topic, peer_id_list> peer_subscriptions_;
+  /// Stores all filters from other peers.
+  std::map<topic, peer_id_list> peer_filters_;
 };
 
 } // namespace broker::alm

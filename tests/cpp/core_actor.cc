@@ -142,9 +142,8 @@ struct fixture : test_coordinator_fixture<config> {
       anon_send(core1, atom::no_events::value);
       run();
       mgr(hdl).id(make_node_id(unbox(id)));
-      if (mgr(hdl).subscriptions() != filter_type{"a", "b", "c"})
-        FAIL("core " << id << " reports wrong subscriptions: "
-                     << mgr(hdl).subscriptions());
+      if (mgr(hdl).filter() != filter_type{"a", "b", "c"})
+        FAIL("core " << id << " reports wrong filter: " << mgr(hdl).filter());
       return hdl;
     };
     core1 = spawn_core(make_uri("test:core1"));
@@ -194,11 +193,9 @@ TEST(local_peers) {
   MESSAGE("core1 & core2 should report each other as peered");
   using actor_list = std::vector<actor>;
   CHECK_EQUAL(mgr(core1).peer_handles(), actor_list({core2}));
-  CHECK_EQUAL(mgr(core1).peer_subscriptions(id(core2)),
-              filter_type({"a", "b", "c"}));
+  CHECK_EQUAL(mgr(core1).peer_filter(id(core2)), filter_type({"a", "b", "c"}));
   CHECK_EQUAL(mgr(core2).peer_handles(), actor_list({core1}));
-  CHECK_EQUAL(mgr(core2).peer_subscriptions(id(core1)),
-              filter_type({"a", "b", "c"}));
+  CHECK_EQUAL(mgr(core2).peer_filter(id(core1)), filter_type({"a", "b", "c"}));
   MESSAGE("spin up driver on core1");
   auto d1 = sys.spawn(driver, core1, false);
   MESSAGE("driver: " << to_string(d1));

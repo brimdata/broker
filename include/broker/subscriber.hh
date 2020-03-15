@@ -6,6 +6,7 @@
 #include <caf/actor.hpp>
 
 #include "broker/data.hh"
+#include "broker/filter_type.hh"
 #include "broker/fwd.hh"
 #include "broker/message.hh"
 #include "broker/subscriber_base.hh"
@@ -57,10 +58,10 @@ protected:
 
 private:
   // -- force users to use `endpoint::make_status_subscriber` ------------------
-  subscriber(endpoint& ep, std::vector<topic> ts, size_t max_qsize);
+  subscriber(endpoint& ep, filter_type filter, size_t max_qsize);
 
   caf::actor worker_;
-  std::vector<topic> filter_;
+  filter_type filter_;
   std::reference_wrapper<endpoint> ep_;
 };
 

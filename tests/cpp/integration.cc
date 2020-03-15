@@ -339,15 +339,13 @@ CAF_TEST(topic_prefix_matching_async_subscribe) {
   MESSAGE("subscribe to 'zeek/events/failures' on earth");
   earth.subscribe_to("zeek/events/failures");
   MESSAGE("verify subscriptions");
-  auto filter = [](std::initializer_list<topic> xs) -> std::vector<topic> {
-    return xs;
-  };
   mercury.loop_after_next_enqueue();
-  CAF_CHECK_EQUAL(mercury.ep.peer_subscriptions(), filter({"zeek/events"}));
+  CAF_CHECK_EQUAL(mercury.ep.peer_subscriptions(),
+                  filter_type({"zeek/events"}));
   venus.loop_after_next_enqueue();
-  CAF_CHECK_EQUAL(venus.ep.peer_subscriptions(), filter({}));
+  CAF_CHECK_EQUAL(venus.ep.peer_subscriptions(), filter_type({}));
   earth.loop_after_next_enqueue();
-  CAF_CHECK_EQUAL(earth.ep.peer_subscriptions(), filter({}));
+  CAF_CHECK_EQUAL(earth.ep.peer_subscriptions(), filter_type({}));
   MESSAGE("publish to 'zeek/events/(logging|failures)' on mercury");
   mercury.publish("zeek/events/failures", "oops", "sorry!");
   mercury.publish("zeek/events/logging", 123, 456);
@@ -398,15 +396,13 @@ CAF_TEST(topic_prefix_matching_make_subscriber) {
   earth_s2.set_rate_calculation(false);
   exec_loop();
   MESSAGE("verify subscriptions");
-  auto filter = [](std::initializer_list<topic> xs) -> std::vector<topic> {
-    return xs;
-  };
   mercury.loop_after_next_enqueue();
-  CAF_CHECK_EQUAL(mercury.ep.peer_subscriptions(), filter({"zeek/events"}));
+  CAF_CHECK_EQUAL(mercury.ep.peer_subscriptions(),
+                  filter_type({"zeek/events"}));
   venus.loop_after_next_enqueue();
-  CAF_CHECK_EQUAL(venus.ep.peer_subscriptions(), filter({}));
+  CAF_CHECK_EQUAL(venus.ep.peer_subscriptions(), filter_type({}));
   earth.loop_after_next_enqueue();
-  CAF_CHECK_EQUAL(earth.ep.peer_subscriptions(), filter({}));
+  CAF_CHECK_EQUAL(earth.ep.peer_subscriptions(), filter_type({}));
   MESSAGE("publish to 'zeek/events/(logging|failures)' on mercury");
   mercury.publish("zeek/events/failures", "oops", "sorry!");
   mercury.publish("zeek/events/logging", 123, 456);

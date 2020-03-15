@@ -47,9 +47,11 @@ public:
   /// peers.
   bool has_remote_master(const std::string& name) {
     // If we don't have a master recorded locally, we could still have a
-    // propagated subscription to a remote core hosting a master.
+    // propagated filter to a remote core hosting a master.
     auto x = name / topics::master_suffix;
-    return dref().peer_subscriptions().count(x) != 0;
+    // We can do an exact match here instead of a prefix match, because master
+    // have no sub-topics.
+    return dref().peer_filters().count(x) != 0;
   }
 
   const auto& masters() const noexcept {

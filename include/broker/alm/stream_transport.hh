@@ -316,7 +316,7 @@ public:
     // Open output stream (triggers handle_peering_handshake_1 on the remote),
     // sending our subscriptions, timestamp, etc. as handshake data.
     auto data = std::make_tuple(caf::actor_cast<caf::actor>(self()), d.id(),
-                                d.subscriptions(), d.timestamp());
+                                d.filter(), d.timestamp());
     auto slot = d.template add_unchecked_outbound_path<message_type>(
       hdl, std::move(data));
     out_.template assign<typename peer_trait::manager>(slot);
@@ -329,8 +329,8 @@ public:
                             filter_type, uint64_t>
   handle_peering_handshake_1(caf::stream<message_type> in,
                              const caf::actor& hdl, const peer_id_type& peer_id,
-                             const filter_type& topics, uint64_t timestamp) {
-    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(peer_id) << BROKER_ARG(topics)
+                             const filter_type& filter, uint64_t timestamp) {
+    BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(peer_id) << BROKER_ARG(filter)
                                  << BROKER_ARG(timestamp));
     auto& d = dref();
     // Sanity checking. At this stage, we must have no direct connection routing
@@ -350,13 +350,13 @@ public:
                    << peer_id);
       return {};
     }
-    // Store subscriptions and announce the new path.
+    // Store filter and announce the new path.
     std::vector<peer_id_type> path{peer_id};
-    d.handle_subscription(path, topics, timestamp);
+    d.handle_subscription(path, filter, timestamp);
     // Add streaming slots for this connection.
     auto data = std::make_tuple(atom::ok::value,
                                 caf::actor_cast<caf::actor>(self()), d.id(),
-                                d.subscriptions(), d.timestamp());
+                                d.filter(), d.timestamp());
     auto oslot = d.template add_unchecked_outbound_path<message_type>(
       hdl, std::move(data));
     out_.template assign<typename peer_trait::manager>(oslot);

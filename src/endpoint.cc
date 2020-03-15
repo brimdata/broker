@@ -321,8 +321,8 @@ std::vector<peer_info> endpoint::peers() const {
   return result;
 }
 
-std::vector<topic> endpoint::peer_subscriptions() const {
-  std::vector<topic> result;
+filter_type endpoint::peer_subscriptions() const {
+  filter_type result;
   caf::scoped_actor self{system_};
   self->request(core(), caf::infinite, atom::get::value,
                 atom::peer::value, atom::subscriptions::value)
@@ -337,10 +337,9 @@ std::vector<topic> endpoint::peer_subscriptions() const {
   return result;
 }
 
-void endpoint::forward(std::vector<topic> ts)
-{
-  BROKER_INFO("forwarding topics" << ts);
-  caf::anon_send(core(), atom::subscribe::value, std::move(ts));
+void endpoint::forward(filter_type filter) {
+  BROKER_INFO("forwarding all prefix matches for:" << filter);
+  caf::anon_send(core(), atom::subscribe::value, std::move(filter));
 }
 
 void endpoint::publish(topic t, data d) {
@@ -379,8 +378,8 @@ status_subscriber endpoint::make_status_subscriber(bool receive_statuses) {
   return result;
 }
 
-subscriber endpoint::make_subscriber(std::vector<topic> ts, size_t max_qsize) {
-  subscriber result{*this, std::move(ts), max_qsize};
+subscriber endpoint::make_subscriber(filter_type filter, size_t max_qsize) {
+  subscriber result{*this, std::move(filter), max_qsize};
   children_.emplace_back(result.worker());
   return result;
 }

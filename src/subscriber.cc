@@ -96,8 +96,8 @@ private:
 behavior subscriber_worker(stateful_actor<subscriber_worker_state>* self,
                            endpoint* ep,
                            detail::shared_subscriber_queue_ptr<> qptr,
-                           std::vector<topic> ts, size_t max_qsize) {
-  self->send(self * ep->core(), atom::join::value, std::move(ts));
+                           filter_type filter, size_t max_qsize) {
+  self->send(self * ep->core(), atom::join::value, std::move(filter));
   self->set_default_handler(skip);
   return {
     [=](const endpoint::stream_type& in) {
@@ -152,11 +152,11 @@ behavior subscriber_worker(stateful_actor<subscriber_worker_state>* self,
 
 } // namespace <anonymous>
 
-subscriber::subscriber(endpoint& e, std::vector<topic> ts, size_t max_qsize)
+subscriber::subscriber(endpoint& e, filter_type filter, size_t max_qsize)
   : super(max_qsize), ep_(e) {
-  BROKER_INFO("creating subscriber for topic(s)" << ts);
-  worker_ = ep_.get().system().spawn(subscriber_worker, &ep_.get(), queue_, std::move(ts),
-                               max_qsize);
+  BROKER_INFO("creating subscriber for filter" << filter);
+  worker_ = ep_.get().system().spawn(subscriber_worker, &ep_.get(), queue_,
+                                     std::move(filter), max_qsize);
 }
 
 subscriber::~subscriber() {

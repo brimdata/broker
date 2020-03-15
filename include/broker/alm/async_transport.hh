@@ -49,7 +49,7 @@ public:
       BROKER_INFO("received repeated peering request");
     // Propagate filter to peers.
     std::vector<peer_id_type> path{remote_id};
-    d.handle_subscription(path, filter, timestamp);
+    d.handle_filter_update(path, filter, timestamp);
     // Reply with our own filter.
     return caf::make_message(atom::peer::value, atom::ok::value, d.id(),
                              d.filter(), d.timestamp());
@@ -64,7 +64,7 @@ public:
       BROKER_INFO("received repeated peering response");
     // Propagate filter to peers.
     std::vector<peer_id_type> path{remote_id};
-    d.handle_subscription(path, filter, timestamp);
+    d.handle_filter_update(path, filter, timestamp);
   }
 
   template <class... Ts>
@@ -85,7 +85,7 @@ public:
       lift<atom::publish>(d, &Derived::publish_command),
       lift<atom::subscribe>(d, &Derived::subscribe),
       lift<atom::publish>(d, &Derived::handle_publication),
-      lift<atom::subscribe>(d, &Derived::handle_subscription),
+      lift<atom::subscribe>(d, &Derived::handle_filter_update),
     };
   }
 

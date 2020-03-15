@@ -55,7 +55,7 @@ caf::behavior peer_actor(peer_actor_type* self, peer_id id) {
     lift<atom::publish>(self->state, &state_type::publish),
     lift<atom::subscribe>(self->state, &state_type::subscribe),
     lift<atom::publish>(self->state, &state_type::handle_publication),
-    lift<atom::subscribe>(self->state, &state_type::handle_subscription),
+    lift<atom::subscribe>(self->state, &state_type::handle_filter_update),
   };
 }
 

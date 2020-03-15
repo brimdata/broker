@@ -352,7 +352,7 @@ public:
     }
     // Store filter and announce the new path.
     std::vector<peer_id_type> path{peer_id};
-    d.handle_subscription(path, filter, timestamp);
+    d.handle_filter_update(path, filter, timestamp);
     // Add streaming slots for this connection.
     auto data = std::make_tuple(atom::ok::value,
                                 caf::actor_cast<caf::actor>(self()), d.id(),
@@ -400,7 +400,7 @@ public:
     hdl_to_istream_[hdl] = d.add_unchecked_inbound_path(in);
     // Store subscriptions and announce the new path.
     std::vector<peer_id_type> path{peer_id};
-    d.handle_subscription(path, topics, timestamp);
+    d.handle_filter_update(path, topics, timestamp);
   }
 
   // -- callbacks --------------------------------------------------------------

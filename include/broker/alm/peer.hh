@@ -9,6 +9,7 @@
 #include "broker/atoms.hh"
 #include "broker/detail/assert.hh"
 #include "broker/detail/lift.hh"
+#include "broker/detail/prefix_matcher.hh"
 #include "broker/error.hh"
 #include "broker/filter_type.hh"
 #include "broker/logger.hh"
@@ -53,7 +54,7 @@ namespace broker::alm {
 /// => handle_publication(msg)
 ///
 /// (atom::subscribe, peer_id_list path, filter_type filter, uint64_t t) -> void
-/// => handle_subscription(path, filter, t)
+/// => handle_filter_update(path, filter, t)
 /// ~~~
 template <class Derived, class PeerId, class CommunicationHandle>
 class peer {
@@ -89,12 +90,10 @@ public:
   }
 
   auto peer_filter(const peer_id_type& x) const {
-    auto predicate = [&](const auto& y) { return x == y; };
-    filter_type result;
-    for (const auto& kvp : peer_filters_)
-      if (std::any_of(kvp.second.begin(), kvp.second.end(), predicate))
-        result.emplace_back(kvp.first);
-    return result;
+    auto i = peer_filters_.find(x);
+    if (i != peer_filters_.end())
+      return i->second;
+    return filter_type{};
   }
 
   auto ttl() const noexcept {
@@ -110,6 +109,16 @@ public:
     for (auto& kvp : tbl_)
       result.emplace_back(kvp.second.hdl);
     return result;
+  }
+
+  // -- convenience functions for subscription information ---------------------
+
+  bool has_remote_subscriber(const topic& x) const noexcept {
+    detail::prefix_matcher matches;
+    for (const auto& [peer, filter] : peer_filters_)
+      if (matches(filter, x))
+        return true;
+    return false;
   }
 
   // -- convenience functions for routing information --------------------------
@@ -152,10 +161,11 @@ public:
   template <class T>
   void publish(const T& content) {
     const auto& topic = get_topic(content);
+    detail::prefix_matcher matches;
     peer_id_list receivers;
-    for (const auto& [prefix, peers] : peer_filters_)
-      if (prefix.prefix_of(topic))
-        receivers.insert(receivers.end(), peers.begin(), peers.end());
+    for (const auto& [peer, filter] : peer_filters_)
+      if (matches(filter, topic))
+        receivers.emplace_back(peer);
     if (receivers.empty()) {
       BROKER_DEBUG("no subscribers found for topic" << topic);
       return;
@@ -180,8 +190,8 @@ public:
     publish(content);
   }
 
-  void handle_subscription(peer_id_list& path, const filter_type& filter,
-                           uint64_t timestamp) {
+  void handle_filter_update(peer_id_list& path, const filter_type& filter,
+                            uint64_t timestamp) {
     BROKER_TRACE(BROKER_ARG(path)
                  << BROKER_ARG(filter) << BROKER_ARG(timestamp));
     // Drop nonsense messages.
@@ -231,13 +241,7 @@ public:
     auto subscriber = path[0];
     auto& ts = peer_timestamps_[subscriber];
     if (ts < timestamp) {
-      // TODO: we can do this more efficient.
-      for (auto& kvp : peer_filters_) {
-        auto& vec = kvp.second;
-        vec.erase(std::remove(vec.begin(), vec.end(), subscriber), vec.end());
-      }
-      for (auto& x : filter)
-        peer_filters_[x].emplace_back(subscriber);
+      peer_filters_[subscriber] = filter;
       ts = timestamp;
     }
   }
@@ -389,17 +393,8 @@ public:
                     [[maybe_unused]] const communication_handle_type& hdl) {
     BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
     tbl_.erase(peer_id);
-    if (distance_to(peer_id) == nil) {
-      auto& subs = peer_filters_;
-      for (auto i = subs.begin(); i != subs.end();) {
-        auto& lst = i->second;
-        lst.erase(std::remove(lst.begin(), lst.end(), peer_id), lst.end());
-        if (lst.empty())
-          i = subs.erase(i);
-        else
-          ++i;
-      }
-    }
+    if (distance_to(peer_id) == nil)
+      peer_filters_.erase(peer_id);
   }
 
   /// Called whenever the user tried to unpeer from an unknown peer.
@@ -428,7 +423,7 @@ public:
       lift<atom::publish>(d, &Derived::publish_command),
       lift<atom::subscribe>(d, &Derived::subscribe),
       lift<atom::publish>(d, &Derived::handle_publication),
-      lift<atom::subscribe>(d, &Derived::handle_subscription),
+      lift<atom::subscribe>(d, &Derived::handle_filter_update),
       [=](atom::get, atom::id) { return dref().id(); },
       [=](atom::get, atom::peer, atom::subscriptions) {
         // For backwards-compatibility, we only report the filter of our
@@ -439,9 +434,9 @@ public:
           return tbl_.count(peer_id) != 0;
         };
         filter_type result;
-        for (const auto& [prefix, peers] : peer_filters_)
-          if (std::any_of(peers.begin(), peers.end(), is_direct_peer))
-            filter_extend(result, prefix);
+        for (const auto& [peer, filter] : peer_filters_)
+          if (is_direct_peer(peer))
+            filter_extend(result, filter);
         return result;
       },
       [=](atom::shutdown) {
@@ -482,7 +477,7 @@ private:
   filter_type filter_;
 
   /// Stores all filters from other peers.
-  std::map<topic, peer_id_list> peer_filters_;
+  std::unordered_map<peer_id_type, filter_type> peer_filters_;
 };
 
 } // namespace broker::alm

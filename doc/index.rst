@@ -52,3 +52,4 @@ Synopsis
   stores
   python
   devs
+  glossary

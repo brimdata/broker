@@ -180,12 +180,13 @@ routing table for all nodes subscribed to the topic (prefix matching).
 
 *TODO: implement and discuss source routing.*
 
-Software Architecture
----------------------
+Implementation
+--------------
 
 Endpoints, master stores, and clone stores (see :ref:`overview`) all map to
-actors. Endpoints represent the main component and also wrap the `actor
-system`_.
+actors. Endpoints wrap the `actor system`_ and the main component: the core
+actor (see architecture_). The core actor is implemented using the mixins we
+discuss in this section.
 
 Mixins
 ~~~~~~

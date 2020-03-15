@@ -15,8 +15,8 @@ namespace broker {
 
 using caf::error;
 
+// --ec-enum-start
 /// Broker's error codes.
-// -- ec-enum-start
 enum class ec : uint8_t {
   /// Not-an-error.
   none,
@@ -60,7 +60,7 @@ enum class ec : uint8_t {
   /// Received an unknown type tag value.
   invalid_tag,
 };
-// -- ec-enum-end
+// --ec-enum-end
 
 /// @relates ec
 const char* to_string(ec code) noexcept;

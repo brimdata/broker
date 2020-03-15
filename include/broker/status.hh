@@ -1,12 +1,5 @@
 #pragma once
 
-// ATTENTION
-// ---------
-// When updating this file, make sure to update doc/comm.rst as well because it
-// copies parts of this file verbatim.
-//
-// Included lines: 26-37
-
 #include <string>
 #include <utility>
 
@@ -24,6 +17,7 @@
 
 namespace broker {
 
+//  --sc-enum-start
 /// Broker's status codes.
 /// @relates status
 enum class sc : uint8_t {
@@ -36,6 +30,7 @@ enum class sc : uint8_t {
   /// Lost connection to peer.
   peer_lost,
 };
+// --sc-enum-end
 
 /// @relates sc
 const char* to_string(sc code) noexcept;

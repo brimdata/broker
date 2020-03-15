@@ -25,6 +25,8 @@ that have no further semantics attached. It's up to senders and
 receivers to agree on a specific layout of messages (e.g., a set of
 doubles for a measurement series).
 
+.. _endpoint:
+
 Endpoints
 ~~~~~~~~~
 
@@ -106,7 +108,7 @@ as they come in (asynchronous API).
 
 Synchronous API
 ***************
-    
+
 The synchronous API exists for applications that want to poll for
 messages explicitly. Once a subscriber is registered for topics,
 calling ``get`` will wait for a new message:
@@ -150,9 +152,9 @@ TODO: Document.
 .. If your application does not require a blocking API, the non-blocking API
 .. offers an asynchronous alternative. Unlike the blocking API, non-blocking
 .. endpoints take a callback for each topic they subscribe to:
-.. 
+..
 .. .. code-block:: cpp
-.. 
+..
 ..   context ctx;
 ..   auto ep = ctx.spawn<nonblocking>();
 ..   ep.subscribe("/foo", [=](const topic& t, const data& d) {
@@ -161,12 +163,12 @@ TODO: Document.
 ..   ep.subscribe("/bar", [=](const topic& t, const data& d) {
 ..     std::cout << t << " -> " << d << std::endl;
 ..   });
-.. 
+..
 .. When a new message matching the subscription arrives, Broker dispatches it to
 .. the callback without blocking.
-.. 
+..
 .. .. warning::
-.. 
+..
 ..   The function ``subscribe`` returns immediately. Capturing variable *by
 ..   reference* introduces a dangling reference once the outer frame returns.
 ..   Therefore, only capture locals *by value*.
@@ -192,7 +194,7 @@ Errors reflect failures that may impact the correctness of operation.
 ``err.code()`` returns an enum ``ec`` that codifies existing error
 codes:
 
-.. literalinclude:: ../broker/error.hh
+.. literalinclude:: ../include/broker/error.hh
    :language: cpp
    :start-after: --ec-enum-start
    :end-before: --ec-enum-end
@@ -209,9 +211,10 @@ example, after a successful peering, both endpoints receive a
 ``peer_added`` status message. The concrete semantics of a status
 depend on its embedded code, which the enum ``sc`` codifies:
 
-.. literalinclude:: ../broker/status.hh
+.. literalinclude:: ../include/broker/status.hh
    :language: cpp
-   :lines: 26-35
+   :start-after: --sc-enum-start
+   :end-before: --sc-enum-end
 
 Status messages have an optional *context* and an optional descriptive
 *message*. The member function ``context<T>`` returns a ``const T*``

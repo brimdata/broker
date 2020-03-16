@@ -184,6 +184,11 @@ public:
     return true;
   }
 
+  template <class LinearPath>
+  bool splice(const LinearPath& path) {
+    return splice(path.begin(), path.end());
+  }
+
   bool equals(const multipath& other) const noexcept {
     auto is_equal = [](const multipath& x, const multipath& y) {
       return x.equals(y);

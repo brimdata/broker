@@ -12,13 +12,7 @@ namespace {
 
 using linear_path = std::vector<std::string>;
 
-struct fixture {
-
-};
-
 } // namespace
-
-FIXTURE_SCOPE(multipath_tests, fixture)
 
 TEST(multipaths are default constructible) {
   multipath<std::string> p;
@@ -59,9 +53,9 @@ TEST(splicing an empty or equal linear path is a nop) {
   multipath<std::string> path1{abc.begin(), abc.end()};
   auto path2 = path1;
   linear_path empty_path;
-  CHECK(path2.splice(empty_path.begin(), empty_path.end()));
+  CHECK(path2.splice(empty_path));
   CHECK_EQUAL(path1, path2);
-  CHECK(path2.splice(abc.begin(), abc.end()));
+  CHECK(path2.splice(abc));
   CHECK_EQUAL(path1, path2);
 }
 
@@ -72,10 +66,8 @@ TEST(splicing merges linear paths into multipaths) {
   linear_path aefg{"a", "e", "f", "g"};
   multipath<std::string> path{"a"};
   for (const auto& lp : {abc, abd, aef, aefg})
-    CHECK(path.splice(lp.begin(), lp.end()));
+    CHECK(path.splice(lp));
   CHECK_EQUAL(
     caf::deep_to_string(path),
     R"__(("a", [("b", [("c"), ("d")]), ("e", [("f", [("g")])])]))__");
 }
-
-FIXTURE_SCOPE_END()

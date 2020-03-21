@@ -7,6 +7,7 @@
 
 #include "caf/meta/omittable_if_empty.hpp"
 #include "caf/meta/type_name.hpp"
+#include "caf/sec.hpp"
 
 #include "broker/detail/assert.hh"
 
@@ -16,6 +17,12 @@ namespace broker::alm {
 template <class Pointer>
 class multipath_node_set {
 public:
+  using mutable_pointer = std::remove_const_t<Pointer>;
+
+  using multipath_type = std::remove_pointer_t<mutable_pointer>;
+
+  using value_type = typename multipath_type::value_type;
+
   explicit multipath_node_set(Pointer this_ptr) : this_(this_ptr) {
     //nop
   }
@@ -46,6 +53,16 @@ private:
 };
 
 /// A recoursive data structure for encoding branching paths for source routing.
+/// For example:
+///
+/// ~~~
+/// A ────> B ─┬──> C
+///            └──> D ────> E
+/// ~~~
+///
+/// In this topology, the sender A sends a message to B that B then has to
+/// forwad to C and D. After that, C is the final destination on that branch,
+/// but D has to forward the message also to E.
 template <class PeerId>
 class multipath {
 public:
@@ -54,6 +71,8 @@ public:
   using const_pointer = const multipath*;
 
   using iterator = pointer;
+
+  using value_type = PeerId;
 
   static constexpr size_t block_size = 16;
 
@@ -169,6 +188,18 @@ public:
     }
   }
 
+  /// Tries to merge `x` into this multipath.
+  /// @returns `false` if `x.id()` is already in ::nodes, `true` otherwise.
+  bool merge(multipath&& x) {
+    auto [iter, inserted] = emplace_node(std::move(x.id_));
+    if (!inserted)
+      return false;
+    for (size_t i = 0; i < x.size_; ++i)
+      if (!iter->merge(std::move(x.nodes_[i])))
+        return false;
+    return true;
+  }
+
   template <class Iterator>
   bool splice(Iterator first, Iterator last) {
     if (first == last)
@@ -200,8 +231,28 @@ public:
 
   template <class Inspector>
   friend auto inspect(Inspector& f, multipath& x) {
-    return f(
-      std::forward_as_tuple(x.id_, caf::meta::omittable_if_empty(), x.nodes()));
+    if constexpr (Inspector::reads_state) {
+      auto tag = caf::meta::omittable_if_empty();
+      auto nodes = x.nodes();
+      return f(std::tie(x.id_, tag, nodes));
+    } else {
+      if (auto err = f(x.id_))
+        return err;
+      size_t num_children = 0;
+      if (auto err = f.begin_sequence(num_children))
+        return err;
+      x.size_ = 0;
+      for (size_t i = 0; i < num_children; ++i) {
+        multipath tmp;
+        if (auto err = inspect(f, tmp))
+          return err;
+        // TODO: this assumes Inspector::result_type is constructible from
+        //       caf::sec.
+        if (!x.merge(std::move(tmp)))
+          return typename Inspector::result_type{caf::sec::runtime_error};
+      }
+      return f.end_sequence();
+    }
   }
 
 private:

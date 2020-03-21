@@ -14,6 +14,8 @@ using linear_path = std::vector<std::string>;
 
 } // namespace
 
+FIXTURE_SCOPE(multipath_tests, base_fixture)
+
 TEST(multipaths are default constructible) {
   multipath<std::string> p;
   CHECK_EQUAL(p.id(), "");
@@ -67,7 +69,36 @@ TEST(splicing merges linear paths into multipaths) {
   multipath<std::string> path{"a"};
   for (const auto& lp : {abc, abd, aef, aefg})
     CHECK(path.splice(lp));
-  CHECK_EQUAL(
-    caf::deep_to_string(path),
-    R"__(("a", [("b", [("c"), ("d")]), ("e", [("f", [("g")])])]))__");
+  CHECK_EQUAL(caf::deep_to_string(path),
+              R"__(("a", [("b", [("c"), ("d")]), ("e", [("f", [("g")])])]))__");
 }
+
+TEST(multipaths are serializable) {
+  multipath<std::string> path{"a"};
+  MESSAGE("fill the path with nodes");
+  {
+    auto ac = path.emplace_node("ac").first;
+    ac->emplace_node("acb");
+    ac->emplace_node("aca");
+    auto ab = path.emplace_node("ab").first;
+    ab->emplace_node("abb");
+    ab->emplace_node("aba");
+  }
+  caf::binary_serializer::container_type buf;
+  MESSAGE("serializer the path into a buffer");
+  {
+    caf::binary_serializer sink{sys, buf};
+    CHECK_EQUAL(sink(path), caf::none);
+  }
+  multipath<std::string> copy{"a"};
+  MESSAGE("deserializers a copy from the path from the buffer");
+  {
+    caf::binary_deserializer source{sys,buf};
+    CHECK_EQUAL(source(copy), caf::none);
+  }
+  MESSAGE("after a serialization roundtrip, the path is equal to its copy");
+  CHECK_EQUAL(path, copy);
+  CHECK_EQUAL(caf::deep_to_string(path), caf::deep_to_string(copy));
+}
+
+FIXTURE_SCOPE_END()

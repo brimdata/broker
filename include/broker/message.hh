@@ -5,6 +5,7 @@
 #include <caf/cow_tuple.hpp>
 #include <caf/variant.hpp>
 
+#include "broker/alm/multipath.hh"
 #include "broker/data.hh"
 #include "broker/internal_command.hh"
 #include "broker/topic.hh"
@@ -24,7 +25,7 @@ using node_message_content = caf::variant<data_message, command_message>;
 template <class PeerId>
 using generic_node_message = caf::cow_tuple< // Fields:
   node_message_content,                      // 0: content
-  uint16_t,                                  // 1: TTL
+  alm::multipath<PeerId>,                    // 1: path
   std::vector<PeerId>                        // 2: receivers
   >;
 
@@ -68,9 +69,10 @@ command_message make_command_message(Topic&& t, Command&& d) {
 
 /// Generates a ::node_message.
 template <class Value>
-node_message make_node_message(Value&& value, uint16_t ttl,
+node_message make_node_message(Value&& value, alm::multipath<caf::node_id> path,
                                std::vector<caf::node_id> receivers = {}) {
-  return node_message{std::forward<Value>(value), ttl, std::move(receivers)};
+  return node_message{std::forward<Value>(value), std::move(path),
+                      std::move(receivers)};
 }
 
 /// Retrieves the topic from a ::data_message.
@@ -160,17 +162,17 @@ node_message_content&& move_content(generic_node_message<PeerId>& x) {
   return std::move(get<0>(x));
 }
 
-/// Retrieves the TTL from a ::data_message.
+/// Retrieves the path from a ::data_message.
 template <class PeerId>
-const uint16_t& get_ttl(const generic_node_message<PeerId>& x) {
+const auto& get_path(const generic_node_message<PeerId>& x) {
   return get<1>(x);
 }
 
-/// Get unshared access the TTL field of a ::node_message. Causes `x` to make a
+/// Get unshared access the path field of a ::node_message. Causes `x` to make a
 /// lazy copy of its content if other ::node_message objects hold references to
 /// it.
 template <class PeerId>
-uint16_t& get_unshared_ttl(generic_node_message<PeerId>& x) {
+auto& get_unshared_path(generic_node_message<PeerId>& x) {
   return get<1>(x.unshared());
 }
 

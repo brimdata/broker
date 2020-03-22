@@ -5,6 +5,7 @@
 
 #include <caf/behavior.hpp>
 
+#include "broker/alm/multipath.hh"
 #include "broker/alm/routing_table.hh"
 #include "broker/atoms.hh"
 #include "broker/detail/assert.hh"
@@ -71,6 +72,8 @@ public:
 
   using message_type = generic_node_message<peer_id_type>;
 
+  using multipath_type = multipath<peer_id_type>;
+
   // -- properties -------------------------------------------------------------
 
   auto& tbl() noexcept {
@@ -121,27 +124,6 @@ public:
     return false;
   }
 
-  // -- convenience functions for routing information --------------------------
-
-  optional<size_t> distance_to(const peer_id_type& remote_peer) {
-    // Check for direct connection first.
-    auto i = tbl_.find(remote_peer);
-    if (i != tbl_.end())
-      return size_t{1};
-    // Get the path with the lowest distance.
-    peer_id_type bucket_name;
-    auto distance = std::numeric_limits<size_t>::max();
-    for (auto& kvp : tbl_) {
-      auto i = kvp.second.distances.find(remote_peer);
-      if (i != kvp.second.distances.end())
-        if (i->second < distance)
-          distance = i->second;
-    }
-    if (distance != std::numeric_limits<size_t>::max())
-      return distance;
-    return nil;
-  }
-
   // -- publish and subscribe functions ----------------------------------------
 
   void subscribe(const filter_type& what) {
@@ -153,9 +135,9 @@ public:
     }
     ++timestamp_;
     peer_id_list path{dref().id()};
-    for (auto& kvp : tbl_)
-      dref().send(kvp.second.hdl, atom::subscribe::value, path, filter_,
-                  timestamp_);
+    for_each_direct(tbl_, [&](auto&, auto& hdl) {
+      dref().send(hdl, atom::subscribe::value, path, filter_, timestamp_);
+    });
   }
 
   template <class T>
@@ -170,9 +152,7 @@ public:
       BROKER_DEBUG("no subscribers found for topic" << topic);
       return;
     }
-    message_type msg{content, ttl_, std::move(receivers)};
-    BROKER_ASSERT(ttl_ > 0);
-    dref().ship(msg);
+    ship(content, receivers);
   }
 
   void publish(node_message_content& content) {
@@ -199,12 +179,17 @@ public:
       BROKER_WARNING("drop nonsense message");
       return;
     }
-    auto src_iter = tbl_.find(path.back());
-    if (src_iter == tbl_.end()) {
-      BROKER_WARNING("received subscription from an unrecognized connection");
+    // Sanity check: we can only receive messages from direct connections.
+    auto forwader = find_row(tbl_, path.back());
+    if (forwader == nullptr) {
+      BROKER_WARNING("received subscription from an unrecognized peer");
       return;
     }
-    auto& src_entry = src_iter->second;
+    if (forwader->hdl == nullptr) {
+      BROKER_WARNING("received subscription from a peer we don't have a direct "
+                     " connection to");
+      return;
+    }
     // Drop all paths that contain loops.
     auto contains = [](const std::vector<peer_id_type>& ids,
                        const peer_id_type& id) {
@@ -215,30 +200,16 @@ public:
       BROKER_DEBUG("drop path containing a loop");
       return;
     }
-    // Update distance of indirect paths.
-    size_t distance = path.size();
-    if (distance > std::numeric_limits<uint16_t>::max()) {
-      BROKER_WARNING("detected path with distance > 65535: drop");
-      return;
-    }
-    // TODO: consider re-calculating the TTL from all distances, because
-    //       currently the TTL only grows and represents the peak distance.
-    ttl_ = std::max(ttl_, static_cast<uint16_t>(distance));
-    if (distance > 1) {
-      auto& ipaths = src_entry.distances;
-      auto i = ipaths.find(path[0]);
-      if (i == ipaths.end())
-        ipaths.emplace(path[0], distance);
-      else if (i->second > distance)
-        i->second = distance;
-    }
+    // The reverse path leads to the sender.
+    add_path(tbl_, path[0], peer_id_list{path.rbegin(), path.rend()});
     // Forward subscription to all peers.
     path.emplace_back(dref().id());
-    for (auto& [pid, entry] : tbl_)
+    for_each_direct(tbl_, [&](auto& pid, auto& hdl) {
       if (!contains(path, pid))
-        dref().send(entry.hdl, atom::subscribe::value, path, filter, timestamp);
+        dref().send(hdl, atom::subscribe::value, path, filter, timestamp);
+    });
     // Store the subscription if it's new.
-    auto subscriber = path[0];
+    const auto& subscriber = path[0];
     auto& ts = peer_timestamps_[subscriber];
     if (ts < timestamp) {
       peer_filters_[subscriber] = filter;
@@ -247,7 +218,13 @@ public:
   }
 
   void handle_publication(message_type& msg) {
-    auto ttl = --get_unshared_ttl(msg);
+    // Verify that we are supposed to handle this message.
+    auto& path = get_unshared_path(msg);
+    if (path.head() != dref().id()) {
+      BROKER_WARNING("Received a message for a different node: drop.");
+      return;
+    }
+    // Dispatch locally if we are on the list of receivers.
     auto& receivers = get_unshared_receivers(msg);
     auto i = std::remove(receivers.begin(), receivers.end(), dref().id());
     if (i != receivers.end()) {
@@ -257,98 +234,52 @@ public:
       else
         dref().ship_locally(get_command_message(msg));
     }
-    if (!receivers.empty()) {
-      if (ttl == 0) {
-        BROKER_WARNING("drop message: TTL expired");
-        return;
-      }
-      ship(msg);
+    if (receivers.empty()) {
+      if (!path.nodes().empty())
+        BROKER_WARNING("More nodes in path but list of receivers is empty.");
+      return;
+    }
+    for (auto& node : path.nodes()) {
+      message_type nmsg{caf::get<0>(msg), std::move(node), receivers};
+      ship(nmsg);
     }
   }
 
   /// Forwards `msg` to all receivers.
   void ship(message_type& msg) {
-    // Use one bucket for each direct connection. Then put all receivers into
-    // the bucket with the shortest path to that receiver. On a tie, we pick
-    // the alphabetically first bucket.
-    using handle_type = communication_handle_type;
-    using value_type = std::pair<handle_type, peer_id_list>;
-    std::map<peer_id_type, value_type> buckets;
-    for (auto& kvp : tbl_)
-      buckets.emplace(kvp.first, std::pair(kvp.second.hdl, peer_id_list{}));
-    auto get_bucket = [&](const peer_id_type& x) -> peer_id_list* {
-      // Check for direct connection.
-      auto i = buckets.find(x);
-      if (i != buckets.end())
-        return &i->second.second;
-      // Get the path with the lowest distance.
-      peer_id_type bucket_name;
-      auto distance = std::numeric_limits<size_t>::max();
-      for (auto& kvp : tbl_) {
-        auto i = kvp.second.distances.find(x);
-        if (i != kvp.second.distances.end()) {
-          if (i->second < distance) {
-            bucket_name = kvp.first;
-            distance = i->second;
-          }
-        }
-      }
-      // Sanity check.
-      bool bucket_invalid;
-      if constexpr (std::is_constructible<bool, peer_id_type>::value)
-        bucket_invalid = !static_cast<bool>(bucket_name);
-      else
-        bucket_invalid = bucket_name.empty();
-      if (bucket_invalid) {
-        BROKER_DEBUG("no path found for " << x);
-        return nullptr;
-      }
-      return &buckets[bucket_name].second;
-    };
-    for (auto& receiver : get_receivers(msg)) {
-      if (auto bucket_ptr = get_bucket(receiver))
-        bucket_ptr->emplace_back(receiver);
-    }
-    for (auto& [first_hop, entry] : buckets) {
-      auto& [hdl, bucket] = entry;
-      if (!bucket.empty()) {
-        // TODO: we always make one copy more than necessary here.
-        auto msg_cpy = msg;
-        get_unshared_receivers(msg_cpy) = std::move(bucket);
-        dref().send(hdl, atom::publish::value, std::move(msg_cpy));
-      }
+    const auto& path = get_path(msg);
+    if (auto i = tbl_.find(path.head()); i != tbl_.end()) {
+      dref().send(i->second.hdl, atom::publish::value, std::move(msg));
+    } else {
+      BROKER_WARNING("no path found to " << path.head());
     }
   }
 
-  /// Forwards `msg` to `receiver`.
-  void ship(data_message& data_msg, const peer_id_type& receiver) {
-    // Prepare node message.
-    message_type msg{std::move(data_msg), ttl_, {receiver}};
-    // Check for direct connection.
-    if (auto i = tbl_.find(receiver); i != tbl_.end()) {
-      dref().send(i->second.hdl, atom::publish::value, std::move(msg));
-      return;
-    }
-    // Find the peer with the shortest path to the receiver. On a tie, we pick
-    // the alphabetically first peer.
-    peer_id_type hop_id;
-    communication_handle_type hop_hdl;
-    size_t distance = std::numeric_limits<size_t>::max();
-    for (auto& [peer_id, entry] : tbl_) {
-      if (auto i = entry.distances.find(receiver); i != entry.distances.end()) {
-        auto x = i->second;
-        if (x < distance || (x == distance && peer_id < hop_id)) {
-          hop_id = peer_id;
-          hop_hdl = entry.hdl;
-          distance = x;
-        }
-      }
-    }
-    if (hop_hdl) {
-      dref().send(hop_hdl, atom::publish::value, std::move(msg));
+  /// Forwards `data_msg` to a single `receiver`.
+  template <class T>
+  void ship(T& data_msg, const peer_id_type& receiver) {
+    if (auto ptr = shortest_path(tbl_, receiver)) {
+      message_type msg{std::move(data_msg),
+                       multipath_type{ptr->begin(), ptr->end()},
+                       peer_id_list{receiver}};
+      ship(msg);
     } else {
-      BROKER_DEBUG("no path found for " << receiver);
+      BROKER_WARNING("no path found to " << receiver);
     }
+  }
+
+  /// Forwards `data_msg` to all `receivers`.
+  template <class T>
+  void ship(T& data_msg, const peer_id_list& receivers) {
+    std::vector<multipath_type> paths;
+    std::vector<peer_id_type> unreachables;
+    generate_paths(receivers, tbl_, paths, unreachables);
+    for (auto& path : paths) {
+      message_type nmsg{data_msg, std::move(path), receivers};
+      ship(nmsg);
+    }
+    if (!unreachables.empty())
+      BROKER_WARNING("no paths to " << unreachables);
   }
 
   // -- callbacks --------------------------------------------------------------
@@ -386,14 +317,13 @@ public:
     peer_removed(peer_id, hdl);
   }
 
-  /// Called whenever this peer removed a connection to a remote peer.
+  /// Called whenever this peer removed a direct connection to a remote peer.
   /// @param peer_id ID of the removed peer.
   /// @param hdl Communication handle of the removed peer.
   void peer_removed([[maybe_unused]] const peer_id_type& peer_id,
                     [[maybe_unused]] const communication_handle_type& hdl) {
     BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
-    tbl_.erase(peer_id);
-    if (distance_to(peer_id) == nil)
+    if (erase_direct(tbl_, peer_id) && !reachable(tbl_, peer_id))
       peer_filters_.erase(peer_id);
   }
 

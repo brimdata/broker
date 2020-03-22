@@ -52,7 +52,7 @@ private:
   Pointer this_;
 };
 
-/// A recoursive data structure for encoding branching paths for source routing.
+/// A recursive data structure for encoding branching paths for source routing.
 /// For example:
 ///
 /// ~~~
@@ -61,7 +61,7 @@ private:
 /// ~~~
 ///
 /// In this topology, the sender A sends a message to B that B then has to
-/// forwad to C and D. After that, C is the final destination on that branch,
+/// forward to C and D. After that, C is the final destination on that branch,
 /// but D has to forward the message also to E.
 template <class PeerId>
 class multipath {
@@ -144,6 +144,11 @@ public:
   }
 
   const auto& id() const noexcept {
+    return id_;
+  }
+
+  /// Returns the root ID of the path.
+  const auto& head() const noexcept {
     return id_;
   }
 
@@ -323,6 +328,36 @@ bool operator==(const multipath<PeerId>& x, const multipath<PeerId>& y) {
 template <class PeerId>
 bool operator!=(const multipath<PeerId>& x, const multipath<PeerId>& y) {
   return !(x == y);
+}
+
+/// Fills the `routes` list such that all reachable receivers are included.
+/// @param receivers List of nodes that should receive a certain message.
+/// @param tbl The routing table for shorest path lookups.
+/// @param routes Stores the source routing paths.
+/// @param unreachables Stores receivers where the routing table lookup failed.
+/// @relates multipath
+/// @relatesalso routing_table
+template <class PeerId, class RoutingTable>
+void generate_paths(const std::vector<PeerId>& receivers,
+                    const RoutingTable& tbl,
+                    std::vector<multipath<PeerId>>& routes,
+                    std::vector<PeerId>& unreachables) {
+  auto route = [&](const PeerId& id) -> auto& {
+    for (auto& mpath : routes)
+      if (mpath.id() == id)
+        return mpath;
+    routes.emplace_back(id);
+    return routes.back();
+  };
+  for (auto& receiver : receivers) {
+    if (auto ptr = shortest_path(tbl, receiver)) {
+      auto& sp = *ptr;
+      BROKER_ASSERT(!sp.empty());
+      route(sp[0]).splice(sp);
+    } else {
+      unreachables.emplace_back(receiver);
+    }
+  }
 }
 
 } // namespace broker::alm

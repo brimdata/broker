@@ -117,11 +117,34 @@ routing table as a multimap over paths:
   it also maps the peer IDs to communication handles (needed by CAF for message
   passing).
 
+Source Routing
+~~~~~~~~~~~~~~
+
+Broker uses source routing. Messages between peers contain the forwarding path,
+encoded as an ``alm::multipath`` object.
+
+The ``multipath`` class implements a recursive data structure for encoding
+branching paths (directed acyclic graphs). For example:
+
+.. code-block:: text
+
+  A ────> B ─┬──> C
+             └──> D ────> E
+
+In this scenario, A sends a message to B, which then forwards to C and D. After
+receiving the message, D also forward to E. This gives senders full control over
+the path that a message travels in the network.
+
+Furthermore, a message also contains IDs of receivers. Not every peer that
+receives a message subscribed to its content. Hence, peers that are not in the
+list of receivers only forward the message without inspecting the payload.
+
+
 Subscription Flooding
 ~~~~~~~~~~~~~~~~~~~~~
 
 Whenever the filter of a peer changes, it sends a *subscription* message to all
-peers it has a direct connection to (neightbors). When establishing a new
+peers it has a direct connection to (neighbors). When establishing a new
 peering relation, the handshake also includes the *subscription* message.
 
 The subscription message consists of:

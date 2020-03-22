@@ -226,7 +226,7 @@ bool operator==(const message_type& x, const message_pattern& y) {
 FIXTURE_SCOPE(async_peer_tests, fixture<async_peer_actor>)
 
 #define CHECK_DISTANCE(src, dst, val)                                          \
-  CHECK_EQUAL(get(src).distance_to(dst), size_t{val})
+  CHECK_EQUAL(alm::distance_to(get(src).tbl(), dst), size_t{val})
 
 TEST(topologies with loops resolve to simple forwarding tables) {
   using peer_vec = std::vector<peer_id>;

@@ -138,7 +138,7 @@ TEST(source routing extracts multipaths from routing tables) {
   };
   add("B", {{"B"}, {"J", "I", "D", "B"}, {"J", "I", "E", "B"}});
   add("D", {{"B", "D"}, {"J", "I", "D"}});
-  add("E", {{"B", "E"}, {"J", "E", "D"}});
+  add("E", {{"B", "E"}, {"J", "I", "E"}});
   add("I", {{"B", "E", "I"}, {"B", "D", "I"}, {"J", "I"}});
   add("J", {{"J"}, {"B", "D", "I", "J"}, {"B", "E", "I", "J"}});
   MESSAGE("Sending to B and D creates a single multipath");

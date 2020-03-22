@@ -105,16 +105,17 @@ distance_to(const routing_table<Id, Handle>& tbl,
 }
 
 /// Erases connection state for a direct connection. Routing paths to the peer
-/// may still remain on the table if the pier is reachable through others.
+/// may still remain on the table if the peer is reachable through others.
 /// @returns `true` if a direct connection was removed, `false` otherwise.
 template <class Id, class Handle>
 bool erase_direct(routing_table<Id, Handle>& tbl,
                   const typename routing_table<Id, Handle>::key_type& peer) {
   if (auto i = tbl.find(peer); i != tbl.end()) {
     auto& row = i->second;
-    if (!row.hdl)
-      return false;
-    row.hdl == nullptr;
+    if constexpr (std::is_integral<Handle>::value)
+      row.hdl = 0;
+    else
+      row.hdl = nullptr;
     for (auto i = row.paths.begin(); i != row.paths.end();) {
       auto& path = *i;
       if (path.front() == peer)
@@ -131,9 +132,21 @@ bool erase_direct(routing_table<Id, Handle>& tbl,
 
 /// Erases all state for the peer.
 template <class Id, class Handle>
-bool erase(const routing_table<Id, Handle>& tbl,
+void erase(routing_table<Id, Handle>& tbl,
            const typename routing_table<Id, Handle>::key_type& peer) {
+  auto stale = [&](const auto& path) {
+    return std::find(path.begin(), path.end(), peer) != path.end();
+  };
   tbl.erase(peer);
+  for (auto& kvp : tbl) {
+    auto& paths = kvp.second.paths;
+    for (auto i = paths.begin(); i != paths.end();) {
+      if (stale(*i))
+        i = paths.erase(i);
+      else
+        ++i;
+    }
+  }
 }
 
 template <class Id, class Handle, class F>

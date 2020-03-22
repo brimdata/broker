@@ -46,7 +46,7 @@ public:
     // remote peer via direct request messages.
     cache_.fetch(
       addr,
-      [=](communication_handle_type hdl) {
+      [=](communication_handle_type hdl) mutable {
         if (auto i = ids_.find(hdl); i != ids_.end()) {
           dref().start_peering(i->second, hdl, std::move(rp));
           return;

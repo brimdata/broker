@@ -1,5 +1,7 @@
 #include "broker/filter_type.hh"
 
+#include <algorithm>
+
 namespace broker {
 
 namespace {

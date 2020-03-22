@@ -84,6 +84,6 @@ TEST(erase_direct drops the direct path but peers can remain reachable) {
     REQUIRE(path != nullptr);
     CHECK_EQUAL(*path, ls("J", "I", "D", "B"));
   }
-  }
+}
 
 FIXTURE_SCOPE_END()

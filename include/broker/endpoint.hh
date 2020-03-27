@@ -252,7 +252,7 @@ public:
 
   // --- forwarding events -----------------------------------------------------
 
-  /// Forward remote events for given filter even if no local subscribers exist.
+  [[deprecated("this legacy function has no effect")]]
   void forward(filter_type filter);
 
   // --- subscribing data ------------------------------------------------------

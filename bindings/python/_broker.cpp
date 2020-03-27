@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include <caf/config.hpp>
 #include <caf/variant.hpp>
 
 #pragma GCC diagnostic push
@@ -39,6 +40,8 @@
 #include "broker/version.hh"
 
 #include <memory>
+
+CAF_PUSH_DEPRECATED_WARNING
 
 namespace py = pybind11;
 
@@ -319,3 +322,4 @@ PYBIND11_MODULE(_broker, m) {
    ;
 }
 
+CAF_POP_WARNINGS

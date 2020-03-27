@@ -90,7 +90,6 @@ configuration::configuration(skip_init_t) {
   opt_group{custom_options_, "?broker"}
     .add(options_.disable_ssl, "disable_ssl",
          "forces Broker to use unencrypted communication")
-    .add(options_.ttl, "ttl", "drop messages after traversing TTL hops")
     .add<std::string>("recording-directory",
                       "path for storing recorded meta information")
     .add<size_t>("output-generator-file-cap",
@@ -182,7 +181,6 @@ caf::settings configuration::dump_content() const {
   auto result = super::dump_content();
   auto& grp = result["broker"].as_dictionary();
   put_missing(grp, "disable_ssl", options_.disable_ssl);
-  put_missing(grp, "ttl", options_.ttl);
   put_missing(grp, "forward", options_.forward);
   if (auto path = get_if<std::string>(&content, "broker.recording-directory"))
     put_missing(grp, "recording-directory", *path);

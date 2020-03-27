@@ -99,10 +99,6 @@ public:
     return filter_type{};
   }
 
-  auto ttl() const noexcept {
-    return ttl_;
-  }
-
   auto timestamp() const noexcept {
     return timestamp_;
   }
@@ -393,9 +389,6 @@ private:
   /// new entries to this table (before calling ::peer_connected) and the peer
   /// removes entries in its ::peer_disconnected callback implementation.
   routing_table_type tbl_;
-
-  /// Stores the maximum distance to any node.
-  uint16_t ttl_ = 0;
 
   /// A logical timestamp.
   uint64_t timestamp_ = 0;

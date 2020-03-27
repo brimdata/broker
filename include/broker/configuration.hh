@@ -1,6 +1,9 @@
 #pragma once
 
 #include <caf/actor_system_config.hpp>
+#include <caf/config.hpp>
+
+CAF_PUSH_DEPRECATED_WARNING
 
 namespace broker {
 
@@ -11,11 +14,7 @@ struct broker_options {
   /// If true, endpoints will forward incoming messages to peers.
   bool forward = true;
 
-  /// TTL to insert into forwarded messages. Messages will be droppped once
-  /// they have traversed more than this many hops. Note that the 1st
-  /// receiver inserts the TTL (not the sender!). The 1st receiver does
-  /// already count against the TTL.
-  unsigned int ttl = 20;
+  [[deprecated("this legacy option has no effect")]] unsigned int ttl = 20;
 
   /// Whether to use real/wall clock time for data store time-keeping
   /// tasks or whether the application will simulate time on its own.
@@ -97,3 +96,5 @@ private:
 };
 
 } // namespace broker
+
+CAF_POP_WARNINGS

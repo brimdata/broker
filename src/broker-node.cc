@@ -499,7 +499,6 @@ int main(int argc, char** argv) {
     for (auto& topic_name : topic_names)
       topics.emplace_back(std::move(topic_name));
   }
-  ep.forward(topics);
   // Enable verbose output if demanded by user.
   actor verbose_logger;
   if (get_or(ep, "verbose", false)) {

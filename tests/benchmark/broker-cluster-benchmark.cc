@@ -892,7 +892,6 @@ int generate_config(std::vector<std::string> directories) {
     step(src, dst, out, f);
     if (!dst.forward)
       return;
-    // TODO: take TTL counter into consideration
     for (auto peer : walk(dst)) {
       auto f_peer = concat_filters(f, peer->topics);
       if (!f_peer.empty())

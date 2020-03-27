@@ -25,13 +25,6 @@ using peer_id = std::string;
 
 using message_type = generic_node_message<peer_id>;
 
-template <class Topic, class Data>
-node_message make_message(Topic&& t, Data&& d, uint16_t ttl,
-                          std::vector<peer_id> receivers = {}) {
-  return {make_data_message(std::forward<Topic>(t), std::forward<Data>(d)), ttl,
-          std::move(receivers)};
-}
-
 // -- async transport ----------------------------------------------------------
 
 class async_peer_actor_state

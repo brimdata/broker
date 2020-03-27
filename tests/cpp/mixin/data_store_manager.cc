@@ -22,13 +22,6 @@ using message_type = generic_node_message<peer_id>;
 
 using clone_actor_type = caf::stateful_actor<detail::clone_state>;
 
-template <class Topic, class Data>
-node_message make_message(Topic&& t, Data&& d, uint16_t ttl,
-                          std::vector<peer_id> receivers = {}) {
-  return {make_data_message(std::forward<Topic>(t), std::forward<Data>(d)), ttl,
-          std::move(receivers)};
-}
-
 class peer_manager
   : public caf::extend<stream_transport<peer_manager, peer_id>,
                        peer_manager>::with<mixin::data_store_manager> {

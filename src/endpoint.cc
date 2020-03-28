@@ -253,19 +253,20 @@ bool endpoint::peer(const std::string& address, uint16_t port,
   BROKER_INFO("starting to peer with" << (address + ":" + std::to_string(port))
                                       << "retry:" << to_string(retry)
                                       << "[synchronous]");
-  bool result = false;
+  bool result = true;
   caf::scoped_actor self{system_};
-  self->request(core_, caf::infinite, atom::peer::value,
-                network_info{address, port, retry})
-  .receive(
-    [&](const caf::actor&) {
-      result = true;
-    },
-    [&](caf::error& err) {
-      BROKER_DEBUG("Cannot peer to" << address << "on port"
-                    << port << ":" << err);
-    }
-  );
+  self
+    ->request(core_, caf::infinite, atom::peer::value,
+              network_info{address, port, retry})
+    .receive(
+      [&](atom::peer, atom::ok, const caf::node_id&) {
+        // nop
+      },
+      [&](caf::error& err) {
+        BROKER_DEBUG("Cannot peer to" << address << "on port" << port << ":"
+                                      << err);
+        result = false;
+      });
   return result;
 }
 

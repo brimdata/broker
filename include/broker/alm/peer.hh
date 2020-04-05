@@ -122,6 +122,15 @@ public:
 
   // -- publish and subscribe functions ----------------------------------------
 
+  /// Floods the subscriptions on this peer to all other peers.
+  void flood_subscriptions() {
+    ++timestamp_;
+    peer_id_list path{dref().id()};
+    for_each_direct(tbl_, [&](auto&, auto& hdl) {
+      dref().send(hdl, atom::subscribe::value, path, filter_, timestamp_);
+    });
+  }
+
   void subscribe(const filter_type& what) {
     BROKER_TRACE(BROKER_ARG(what));
     auto not_internal = [](const topic& x) { return !is_internal(x); };
@@ -129,11 +138,7 @@ public:
       BROKER_DEBUG("already subscribed to topic");
       return;
     }
-    ++timestamp_;
-    peer_id_list path{dref().id()};
-    for_each_direct(tbl_, [&](auto&, auto& hdl) {
-      dref().send(hdl, atom::subscribe::value, path, filter_, timestamp_);
-    });
+    flood_subscriptions();
   }
 
   template <class T>
@@ -196,6 +201,11 @@ public:
       BROKER_DEBUG("drop path containing a loop");
       return;
     }
+    // TODO: We currently only consider the sender. Theoretically, the path
+    //       could contain a yet unknown peer as well. We should receive a
+    //       subscription message from those peers eventually, but should we
+    //       trigger a discovery here?
+    bool learned_new_peer = !reachable(tbl_, path[0]);
     // The reverse path leads to the sender.
     add_path(tbl_, path[0], peer_id_list{path.rbegin(), path.rend()});
     // Forward subscription to all peers.
@@ -204,6 +214,17 @@ public:
       if (!contains(path, pid))
         dref().send(hdl, atom::subscribe::value, path, filter, timestamp);
     });
+    // If we have larned a new peer, we flood our own subscriptions as well.
+    if (learned_new_peer) {
+      BROKER_DEBUG(
+        "got to know a new peer via subscription flooding: " << path[0]);
+      communication_handle_type dummy;
+      dref().peer_connected(path[0], dummy);
+      // TODO: This primarly makes sure that eventually all peers know each
+      //       other. There may be more efficient ways to ensure connectivity,
+      //       though.
+      flood_subscriptions();
+    }
     // Store the subscription if it's new.
     const auto& subscriber = path[0];
     auto& ts = peer_timestamps_[subscriber];
@@ -292,6 +313,8 @@ public:
   /// Called whenever this peer established a new connection.
   /// @param peer_id ID of the newly connected peer.
   /// @param hdl Communication handle for exchanging messages with the new peer.
+  ///            The handle is default-constructed if no direct connection
+  ///            exists (yet).
   /// @note The new peer gets stored in the routing table *before* calling this
   ///       member function.
   void peer_connected([[maybe_unused]] const peer_id_type& peer_id,
@@ -369,6 +392,7 @@ public:
         // TODO: this handler exists only for backwards-compatibility. Consider
         //       simply using CAF's exit messages instead of using this
         //       anti pattern.
+        BROKER_DEBUG("received 'shutdown', call quit");
         dref().self()->quit(caf::exit_reason::user_shutdown);
       },
       [=](atom::publish, atom::local, command_message& msg) {

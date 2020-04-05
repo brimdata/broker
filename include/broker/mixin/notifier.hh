@@ -168,7 +168,7 @@ private:
     auto on_cache_hit = [=](network_info x) { emit(peer_id, x, code, msg); };
     auto on_cache_miss = [=](caf::error) { emit(peer_id, {}, code, msg); };
     auto& tbl = dref().tbl();
-    if (auto i = tbl.find(peer_id); i != tbl.end()) {
+    if (auto i = tbl.find(peer_id); i != tbl.end() && i->second.hdl) {
       dref().cache().fetch(i->second.hdl, on_cache_hit, on_cache_miss);
     } else {
       on_cache_miss({});

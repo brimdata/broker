@@ -176,7 +176,7 @@ public:
     BROKER_TRACE(BROKER_ARG(path)
                  << BROKER_ARG(filter) << BROKER_ARG(timestamp));
     // Drop nonsense messages.
-    if (path.empty() || filter.empty()) {
+    if (path.empty()) {
       BROKER_WARNING("drop nonsense message");
       return;
     }

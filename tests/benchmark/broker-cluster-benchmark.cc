@@ -6,6 +6,8 @@
 
 #include "caf/actor_system.hpp"
 #include "caf/actor_system_config.hpp"
+#include "caf/attach_stream_sink.hpp"
+#include "caf/attach_stream_source.hpp"
 #include "caf/event_based_actor.hpp"
 #include "caf/settings.hpp"
 #include "caf/stateful_actor.hpp"
@@ -249,10 +251,10 @@ bool is_sender_and_receiver(const node& x) {
   return is_sender(x) && is_receiver(x);
 }
 
-std::vector<broker::topic> topics(const node& x) {
-  std::vector<broker::topic> result;
-  for (auto& t : x.topics)
-    result.emplace_back(t);
+broker::filter_type filter(const node& x) {
+  broker::filter_type result;
+  for (auto& topic : x.topics)
+    filter_extend(result, topic);
   return result;
 }
 
@@ -374,8 +376,8 @@ void generator(caf::stateful_actor<generator_state>* self, node* this_node,
       size_t remaining;
       size_t pushed = 0;
     };
-    self->make_source(
-      core,
+    attach_stream_source(
+      self, core,
       [&](state& st) {
         // Take ownership of `ptr`.
         st.gptr = std::move(ptr);
@@ -415,8 +417,8 @@ void generator(caf::stateful_actor<generator_state>* self, node* this_node,
       // reacing the end of the generator file.
       return st.gptr == nullptr || st.gptr->at_end();
     };
-    self->make_source(
-      core,
+    attach_stream_source(
+      self, core,
       [&](state& st) {
         // Take ownership of `ptr`.
         st.gptr = std::move(ptr);
@@ -490,8 +492,8 @@ struct consumer_state {
       self->send(observer, broker::atom::ack::value);
       verbose::println(this_node->name, " waits for messages");
     }
-    self->make_sink(
-      in,
+    attach_stream_sink(
+      self, in,
       [](caf::unit_t&) {
         // nop
       },
@@ -518,9 +520,9 @@ caf::behavior consumer(caf::stateful_actor<consumer_state>* self,
                        node* this_node, caf::actor core, caf::actor observer) {
   self->state.this_node = this_node;
   self->state.observer = observer;
-  self->send(self * core, broker::atom::join::value, topics(*this_node));
+  self->send(self * core, broker::atom::join::value, filter(*this_node));
   self->send(self * core, broker::atom::join::value, broker::atom::store::value,
-             topics(*this_node));
+             filter(*this_node));
   if (!verbose::enabled())
     return {
       [=](caf::stream<broker::data_message> in) {

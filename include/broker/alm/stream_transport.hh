@@ -185,7 +185,7 @@ public:
   }
 
   /// Subscribes `self->sender()` to `store_manager()`.
-  auto add_sending_store(const caf::actor& hdl, const filter_type& filter) {
+  auto add_sending_store(const filter_type& filter) {
     using element_type = typename store_trait::element;
     using result_type = caf::outbound_stream_slot<element_type>;
     auto slot = add_unchecked_outbound_path<element_type>();
@@ -580,6 +580,9 @@ public:
       },
       // Allow local publishers to hoook directly into the stream.
       [this](caf::stream<data_message> in) { add_unchecked_inbound_path(in); },
+      [this](caf::stream<node_message_content> in) {
+        add_unchecked_inbound_path(in);
+      },
       // Special handlers for bypassing streams and/or forwarding.
       [this](atom::publish, atom::local, data_message msg) {
         worker_manager().push(msg);

@@ -125,7 +125,8 @@ TEST(source routing extracts multipaths from routing tables) {
   alm::routing_table<std::string, int> tbl;
   auto add = [&](std::string id, std::vector<std::vector<std::string>> paths) {
     auto& entry = tbl.emplace(id, table_type::mapped_type{0}).first->second;
-    entry.paths.insert(paths.begin(), paths.end());
+    for (auto& path : paths)
+      entry.paths.emplace(0, std::move(path));
   };
   // Creates a list of IDs (strings).
   auto ls = [](auto... xs) {

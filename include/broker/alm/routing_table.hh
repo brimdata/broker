@@ -5,27 +5,158 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <utility>
 
 #include "broker/optional.hh"
 
 namespace broker::alm {
 
-/// Compares two paths by size, falling back to lexicographical comparison on
-/// equal sizes.
+/// Stores a linear path to another peer with a logical timestamp for when this
+/// route was announced.
 template <class PeerId>
-struct path_less {
-  using path_type = std::vector<PeerId>;
+class routing_path {
+public:
+  using value_type = PeerId;
 
-  /// Returns `true` if X is shorter than Y or both paths have equal length but
-  /// X comes before Y lexicographically, `false` otherwise.
-  bool operator()(const path_type& x, const path_type& y) const noexcept {
-    if (x.size() < y.size())
-      return true;
-    if (x.size() == y.size())
-      return x < y;
-    return false;
+  using container_type = std::vector<PeerId>;
+
+  using iterator = typename container_type::iterator;
+
+  using const_iterator = typename container_type::const_iterator;
+
+  routing_path(uint64_t timestamp, container_type content)
+    : timestamp_(timestamp), content_(std::move(content)) {
+    // nop
   }
+
+  template <class Iterator>
+  routing_path(uint64_t timestamp, Iterator first, Iterator last)
+    : timestamp_(timestamp), content_(first, last) {
+    // nop
+  }
+
+  routing_path() noexcept(
+    std::is_nothrow_default_constructible<container_type>::value)
+    = default;
+
+  routing_path(routing_path&&) noexcept(
+    std::is_nothrow_move_constructible<container_type>::value)
+    = default;
+
+  routing_path(const routing_path&) = default;
+
+  routing_path& operator=(routing_path&&) noexcept(
+    std::is_nothrow_move_assignable<container_type>::value)
+    = default;
+
+  routing_path& operator=(const routing_path&) = default;
+
+  // -- properties -------------------------------------------------------------
+
+  auto empty() const noexcept {
+    return content_.empty();
+  }
+
+  auto size() const noexcept {
+    return content_.size();
+  }
+
+  const auto& container() const noexcept {
+    return content_;
+  }
+
+  const auto& timestamp() const noexcept {
+    return timestamp_;
+  }
+
+  // -- element access ---------------------------------------------------------
+
+  auto& operator[](size_t index) noexcept {
+    return content_[index];
+  }
+
+  const auto& operator[](size_t index) const noexcept {
+    return content_[index];
+  }
+
+  auto& at(size_t index) {
+    return content_.at(index);
+  }
+
+  const auto& at(size_t index) const {
+    return content_.at(index);
+  }
+
+  auto* data() noexcept {
+    return content_.data();
+  }
+
+  const auto* data() const noexcept {
+    return content_.data();
+  }
+
+  // -- iterator interface -----------------------------------------------------
+
+  auto begin() noexcept {
+    return content_.begin();
+  }
+
+  auto begin() const noexcept {
+    return content_.begin();
+  }
+
+  auto end() noexcept {
+    return content_.end();
+  }
+
+  auto end() const noexcept {
+    return content_.end();
+  }
+
+  // -- modifiers --------------------------------------------------------------
+
+  void swap(routing_path&other) noexcept {
+    using std::swap;
+    swap(content_, other.content_);
+    swap(timestamp_, other.timestamp_);
+  }
+
+  template <class... Ts>
+  auto insert(Ts&&... xs) {
+    return content_.insert(std::forward<Ts>(xs)...);
+  }
+
+private:
+  uint64_t timestamp_ = 0;
+
+  container_type content_;
 };
+
+/// Returns `true` if X is shorter than Y or both paths have equal length but
+/// X comes before Y lexicographically, `false` otherwise.
+template <class PeerId>
+bool operator<(const routing_path<PeerId>& x,
+               const routing_path<PeerId>& y) noexcept {
+  if (x.size() < y.size())
+    return true;
+  if (x.size() == y.size())
+    return x.container() < y.container();
+  return false;
+}
+
+/// Returns whether `x` and `y` have the same content. Ignores timestamps for
+/// the comparison.
+template <class PeerId>
+bool operator==(const routing_path<PeerId>& x,
+                const routing_path<PeerId>& y) noexcept {
+  return x.container() == y.container();
+}
+
+template <class PeerId>
+bool operator!=(const routing_path<PeerId>& x,
+                const routing_path<PeerId>& y) noexcept {
+  return !(x == y);
+}
 
 /// Stores paths to all peers. For direct connection, also stores a
 /// communication handle for reaching the peer.
@@ -34,7 +165,7 @@ class routing_table_row {
 public:
   using peer_id_type = PeerId;
 
-  using path_type = std::vector<peer_id_type>;
+  using path_type = routing_path<peer_id_type>;
 
   using communication_handle_type = CommunicationHandle;
 
@@ -43,7 +174,7 @@ public:
   CommunicationHandle hdl;
 
   /// Stores paths leading to this peer, sorted by path length.
-  std::set<path_type, path_less<peer_id_type>> paths;
+  std::set<path_type> paths;
 
   routing_table_row() = default;
 
@@ -78,7 +209,7 @@ get_peer_id(const routing_table<Id, Handle>& tbl, const Handle& hdl) {
 /// Returns all hops to the destination (including `dst` itself) or
 /// `nullptr` if the destination is unreachable.
 template <class Id, class Handle>
-const std::vector<Id>*
+const routing_path<Id>*
 shortest_path(const routing_table<Id, Handle>& tbl,
               const typename routing_table<Id, Handle>::key_type& peer) {
   if (auto i = tbl.find(peer); i != tbl.end() && !i->second.paths.empty())
@@ -118,7 +249,7 @@ bool erase_direct(routing_table<Id, Handle>& tbl,
       row.hdl = nullptr;
     for (auto i = row.paths.begin(); i != row.paths.end();) {
       auto& path = *i;
-      if (path.front() == peer)
+      if (path[0] == peer)
         i = row.paths.erase(i);
       else
         ++i;
@@ -182,8 +313,8 @@ auto* find_row(routing_table<Id, Handle>& tbl,
 template <class Id, class Handle>
 void add_path(routing_table<Id, Handle>& tbl,
               const typename routing_table<Id, Handle>::key_type& peer,
-              std::vector<Id> path) {
-  tbl[peer].paths.emplace(std::move(path));
+              uint64_t timestamp, std::vector<Id> path) {
+  tbl[peer].paths.emplace(timestamp, std::move(path));
 }
 
 } // namespace broker::alm

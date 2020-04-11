@@ -207,7 +207,8 @@ public:
     //       trigger a discovery here?
     bool learned_new_peer = !reachable(tbl_, path[0]);
     // The reverse path leads to the sender.
-    add_path(tbl_, path[0], peer_id_list{path.rbegin(), path.rend()});
+    add_path(tbl_, path[0], timestamp,
+             peer_id_list{path.rbegin(), path.rend()});
     // Forward subscription to all peers.
     path.emplace_back(dref().id());
     for_each_direct(tbl_, [&](auto& pid, auto& hdl) {

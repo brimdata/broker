@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace broker::alm {
 
@@ -49,5 +50,8 @@ template <class Inspector>
 typename Inspector::result_type inspect(Inspector& f, lamport_timestamp& x) {
   return f(x.value);
 }
+
+/// @relates lamport_timestamp
+using vector_timestamp = std::vector<lamport_timestamp>;
 
 } // namespace broker::alm

@@ -15,6 +15,7 @@ set(tests
   cpp/data.cc
   cpp/detail/data_generator.cc
   cpp/detail/generator_file_writer.cc
+  cpp/detail/iterator_range.cc
   cpp/detail/meta_command_writer.cc
   cpp/detail/meta_data_writer.cc
   cpp/error.cc

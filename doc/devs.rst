@@ -100,16 +100,33 @@ Each Broker peer in the network has:
 - A ``peer_filters_`` map of type ``map<peer_id_type, filter_type>`` for storing
   the current filter of each known peer.
 
+Timestamps
+~~~~~~~~~~
+
+Broker has two types for modelling logical clocks:
+
+#. ``broker::alm::lamport_timestamp``
+#. ``broker::alm::vector_timestamp``
+
+The former type is a thin wrapper (AKA *strong typedef*) for a 64-bit unsigned
+integer. It provides ``operator++`` as well as the comparison operators. Each
+peer keeps its own Lamport timestamp. The peer increments the timestamp whenever
+it changes its routing table or its filter.
+
+The latter type is a list of ``lamport_timestamp``. Broker uses vector
+timestamps to versionize paths.
+
 Routing Tables
 ~~~~~~~~~~~~~~
 
-A routing table maps peer IDs to paths. Conceptually, one can think of the
-routing table as a multimap over paths:
+A routing table maps peer IDs to versioned paths. Conceptually, the routing
+table maps each peer to a set of paths that lead to it.
 
 .. code-block:: C++
 
   using path = std::vector<peer_id>;
-  using routing_table = std::multimap<peer_id, path>;
+  using versioned_paths = std::map<path, vector_timestamp>;
+  using routing_table = std::map<peer_id, versioned_paths>;
 
 .. note::
 
@@ -138,7 +155,6 @@ the path that a message travels in the network.
 Furthermore, a message also contains IDs of receivers. Not every peer that
 receives a message subscribed to its content. Hence, peers that are not in the
 list of receivers only forward the message without inspecting the payload.
-
 
 Subscription Flooding
 ~~~~~~~~~~~~~~~~~~~~~

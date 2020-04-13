@@ -4,16 +4,6 @@
 
 #include "test.hh"
 
-// Hack to get CHECK_EQUAL working with routing paths and string lists.
-namespace broker::alm{
-
-inline bool operator==(const routing_path<std::string>& xs,
-                       const std::vector<std::string>& ys) {
-  return xs.container() == ys;
-}
-
-} // namespace broker::alm
-
 using namespace broker;
 
 namespace {
@@ -43,7 +33,8 @@ struct fixture {
                    std::vector<std::vector<std::string>> paths) {
       auto& entry = tbl.emplace(id, table_type::mapped_type{0}).first->second;
       for (auto& path : paths)
-        entry.paths.emplace(alm::lamport_timestamp{}, path);
+        entry.versioned_paths.emplace(std::move(path),
+                                      alm::vector_timestamp(path.size()));
     };
     add("B", {{"B"}, {"J", "I", "D", "B"}, {"J", "I", "E", "B"}});
     add("D", {{"B", "D"}, {"J", "I", "D"}});

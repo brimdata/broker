@@ -76,8 +76,9 @@ using sync_point = caf::atom_constant<caf::atom("sync_point")>;
 /// --- communciation with core actor ------------------------------------------
 
 using no_events = caf::atom_constant<caf::atom("noEvents")>;
-using subscriptions = caf::atom_constant<caf::atom("subs")>;
+using revoke_path = caf::atom_constant<caf::atom("revokePath")>;
 using snapshot = caf::atom_constant<caf::atom("snapshot")>;
+using subscriptions = caf::atom_constant<caf::atom("subs")>;
 
 } // namespace atom
 } // namespace broker

@@ -8,156 +8,28 @@
 #include <utility>
 
 #include "broker/alm/lamport_timestamp.hh"
+#include "broker/detail/iterator_range.hh"
+#include "broker/detail/map_index_iterator.hh"
 #include "broker/optional.hh"
 
 namespace broker::alm {
 
-/// Stores a linear path to another peer with a logical timestamp for when this
-/// route was announced.
+/// Compares two paths by size, falling back to lexicographical comparison on
+/// equal sizes.
 template <class PeerId>
-class routing_path {
-public:
-  using value_type = PeerId;
+struct path_less {
+  using path_type = std::vector<PeerId>;
 
-  using container_type = std::vector<PeerId>;
-
-  using iterator = typename container_type::iterator;
-
-  using const_iterator = typename container_type::const_iterator;
-
-  routing_path(lamport_timestamp timestamp, container_type content)
-    : timestamp_(timestamp), content_(std::move(content)) {
-    // nop
+  /// Returns `true` if X is shorter than Y or both paths have equal length but
+  /// X comes before Y lexicographically, `false` otherwise.
+  bool operator()(const path_type& x, const path_type& y) const noexcept {
+    if (x.size() < y.size())
+      return true;
+    if (x.size() == y.size())
+      return x < y;
+    return false;
   }
-
-  template <class Iterator>
-  routing_path(lamport_timestamp timestamp, Iterator first, Iterator last)
-    : timestamp_(timestamp), content_(first, last) {
-    // nop
-  }
-
-  routing_path() noexcept(
-    std::is_nothrow_default_constructible<container_type>::value)
-    = default;
-
-  routing_path(routing_path&&) noexcept(
-    std::is_nothrow_move_constructible<container_type>::value)
-    = default;
-
-  routing_path(const routing_path&) = default;
-
-  routing_path& operator=(routing_path&&) noexcept(
-    std::is_nothrow_move_assignable<container_type>::value)
-    = default;
-
-  routing_path& operator=(const routing_path&) = default;
-
-  // -- properties -------------------------------------------------------------
-
-  auto empty() const noexcept {
-    return content_.empty();
-  }
-
-  auto size() const noexcept {
-    return content_.size();
-  }
-
-  const auto& container() const noexcept {
-    return content_;
-  }
-
-  const auto& timestamp() const noexcept {
-    return timestamp_;
-  }
-
-  // -- element access ---------------------------------------------------------
-
-  auto& operator[](size_t index) noexcept {
-    return content_[index];
-  }
-
-  const auto& operator[](size_t index) const noexcept {
-    return content_[index];
-  }
-
-  auto& at(size_t index) {
-    return content_.at(index);
-  }
-
-  const auto& at(size_t index) const {
-    return content_.at(index);
-  }
-
-  auto* data() noexcept {
-    return content_.data();
-  }
-
-  const auto* data() const noexcept {
-    return content_.data();
-  }
-
-  // -- iterator interface -----------------------------------------------------
-
-  auto begin() noexcept {
-    return content_.begin();
-  }
-
-  auto begin() const noexcept {
-    return content_.begin();
-  }
-
-  auto end() noexcept {
-    return content_.end();
-  }
-
-  auto end() const noexcept {
-    return content_.end();
-  }
-
-  // -- modifiers --------------------------------------------------------------
-
-  void swap(routing_path&other) noexcept {
-    using std::swap;
-    swap(content_, other.content_);
-    swap(timestamp_, other.timestamp_);
-  }
-
-  template <class... Ts>
-  auto insert(Ts&&... xs) {
-    return content_.insert(std::forward<Ts>(xs)...);
-  }
-
-private:
-  lamport_timestamp timestamp_;
-
-  container_type content_;
 };
-
-/// Returns `true` if X is shorter than Y or both paths have equal length but
-/// X comes before Y lexicographically, `false` otherwise.
-template <class PeerId>
-bool operator<(const routing_path<PeerId>& x,
-               const routing_path<PeerId>& y) noexcept {
-  if (x.size() < y.size())
-    return true;
-  if (x.size() == y.size())
-    return x.container() < y.container();
-  return false;
-}
-
-/// Returns whether `x` and `y` have the same content. Ignores timestamps for
-/// the comparison.
-template <class PeerId>
-bool operator==(const routing_path<PeerId>& x,
-                const routing_path<PeerId>& y) noexcept {
-  return x.container() == y.container();
-}
-
-template <class PeerId>
-bool operator!=(const routing_path<PeerId>& x,
-                const routing_path<PeerId>& y) noexcept {
-  return !(x == y);
-}
 
 /// Stores paths to all peers. For direct connection, also stores a
 /// communication handle for reaching the peer.
@@ -166,16 +38,26 @@ class routing_table_row {
 public:
   using peer_id_type = PeerId;
 
-  using path_type = routing_path<peer_id_type>;
-
   using communication_handle_type = CommunicationHandle;
+
+  /// Stores a linear path to another peer with logical timestamps for when this
+  /// route was announced.
+  using path_type = std::vector<peer_id_type>;
 
   /// Stores an implementation-specific handle for talking to the peer. The
   /// handle is null if no direct connection exists.
   CommunicationHandle hdl;
 
-  /// Stores paths leading to this peer, sorted by path length.
-  std::set<path_type> paths;
+  /// Stores all paths leading to this peer, using a vector timestamp for
+  /// versioning (stores only the latest version). Sorted by path length.
+  std::map<path_type, vector_timestamp, path_less<PeerId>> versioned_paths;
+
+  /// Returns the sorted paths without the associated vector timestamp.
+  auto paths() const {
+    using namespace detail;
+    return make_iterator_range(map_first(versioned_paths.begin()),
+                               map_first(versioned_paths.end()));
+  }
 
   routing_table_row() = default;
 
@@ -209,28 +91,28 @@ get_peer_id(const routing_table<Id, Handle>& tbl, const Handle& hdl) {
 
 /// Returns all hops to the destination (including `dst` itself) or
 /// `nullptr` if the destination is unreachable.
-template <class Id, class Handle>
-const routing_path<Id>*
-shortest_path(const routing_table<Id, Handle>& tbl,
-              const typename routing_table<Id, Handle>::key_type& peer) {
-  if (auto i = tbl.find(peer); i != tbl.end() && !i->second.paths.empty())
-    return std::addressof(*i->second.paths.begin());
+template <class RoutingTable>
+const std::vector<typename RoutingTable::key_type>*
+shortest_path(const RoutingTable& tbl,
+              const typename RoutingTable::key_type& peer) {
+  if (auto i = tbl.find(peer);
+      i != tbl.end() && !i->second.versioned_paths.empty())
+    return std::addressof(i->second.versioned_paths.begin()->first);
   return nullptr;
 }
 
 /// Checks whether the routing table `tbl` contains a path to the `peer`.
-template <class Id, class Handle>
-bool reachable(const routing_table<Id, Handle>& tbl,
-               const typename routing_table<Id, Handle>::key_type& peer) {
+template <class RoutingTable>
+bool reachable(const RoutingTable& tbl,
+               const typename RoutingTable::key_type& peer) {
   return tbl.count(peer) != 0;
 }
 
 /// Returns the hop count on the shortest path or `nil` if no route to the peer
 /// exists.
-template <class Id, class Handle>
-optional<size_t>
-distance_to(const routing_table<Id, Handle>& tbl,
-            const typename routing_table<Id, Handle>::key_type& peer) {
+template <class RoutingTable>
+optional<size_t> distance_to(const RoutingTable& tbl,
+                             const typename RoutingTable::key_type& peer) {
   if (auto ptr = shortest_path(tbl, peer))
     return ptr->size();
   return nil;
@@ -239,23 +121,25 @@ distance_to(const routing_table<Id, Handle>& tbl,
 /// Erases connection state for a direct connection. Routing paths to the peer
 /// may still remain on the table if the peer is reachable through others.
 /// @returns `true` if a direct connection was removed, `false` otherwise.
-template <class Id, class Handle>
-bool erase_direct(routing_table<Id, Handle>& tbl,
-                  const typename routing_table<Id, Handle>::key_type& peer) {
+template <class RoutingTable>
+bool erase_direct(RoutingTable& tbl,
+                  const typename RoutingTable::key_type& peer) {
+  using mapped_type = typename RoutingTable::mapped_type;
+  using handle_type = typename mapped_type::communication_handle_type;
   if (auto i = tbl.find(peer); i != tbl.end()) {
     auto& row = i->second;
-    if constexpr (std::is_integral<Handle>::value)
+    if constexpr (std::is_integral<handle_type>::value)
       row.hdl = 0;
     else
       row.hdl = nullptr;
-    for (auto i = row.paths.begin(); i != row.paths.end();) {
-      auto& path = *i;
+    for (auto i = row.versioned_paths.begin(); i != row.versioned_paths.end();) {
+      auto& path = i->first;
       if (path[0] == peer)
-        i = row.paths.erase(i);
+        i = row.versioned_paths.erase(i);
       else
         ++i;
     }
-    if (row.paths.empty())
+    if (row.versioned_paths.empty())
       tbl.erase(peer);
     return true;
   }
@@ -263,17 +147,16 @@ bool erase_direct(routing_table<Id, Handle>& tbl,
 }
 
 /// Erases all state for the peer.
-template <class Id, class Handle>
-void erase(routing_table<Id, Handle>& tbl,
-           const typename routing_table<Id, Handle>::key_type& peer) {
+template <class RoutingTable>
+void erase(RoutingTable& tbl, const typename RoutingTable::key_type& peer) {
   auto stale = [&](const auto& path) {
     return std::find(path.begin(), path.end(), peer) != path.end();
   };
   tbl.erase(peer);
   for (auto& kvp : tbl) {
-    auto& paths = kvp.second.paths;
+    auto& paths = kvp.second.versioned_paths;
     for (auto i = paths.begin(); i != paths.end();) {
-      if (stale(*i))
+      if (stale(i->first))
         i = paths.erase(i);
       else
         ++i;
@@ -311,11 +194,22 @@ auto* find_row(routing_table<Id, Handle>& tbl,
 
 /// Adds a path to the peer, inserting a new row for the peer is it does not
 /// exist yet.
-template <class Id, class Handle>
-void add_path(routing_table<Id, Handle>& tbl,
-              const typename routing_table<Id, Handle>::key_type& peer,
-              lamport_timestamp timestamp, std::vector<Id> path) {
-  tbl[peer].paths.emplace(timestamp, std::move(path));
+template <class RoutingTable>
+bool add_or_update_path(RoutingTable& tbl,
+                        const typename RoutingTable::key_type& peer,
+                        std::vector<typename RoutingTable::key_type> path,
+                        vector_timestamp ts) {
+  auto& versioned_paths = tbl[peer].versioned_paths;
+  if (auto i = versioned_paths.find(path); i != versioned_paths.end()) {
+    if (i->second < ts) {
+      i->second = std::move(ts);
+      return true;
+    }
+    return false;
+  } else {
+    versioned_paths.emplace(std::move(path), std::move(ts));
+    return true;
+  }
 }
 
 } // namespace broker::alm

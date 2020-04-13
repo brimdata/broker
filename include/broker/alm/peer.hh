@@ -124,11 +124,12 @@ public:
   // -- publish and subscribe functions ----------------------------------------
 
   /// Floods the subscriptions on this peer to all other peers.
+  /// @note The functions does *not* bump the Lamport timestamp before sending.
   void flood_subscriptions() {
-    ++timestamp_;
     peer_id_list path{dref().id()};
+    vector_timestamp ts{timestamp_};
     for_each_direct(tbl_, [&](auto&, auto& hdl) {
-      dref().send(hdl, atom::subscribe::value, path, filter_, timestamp_);
+      dref().send(hdl, atom::subscribe::value, path, ts, filter_);
     });
   }
 
@@ -139,6 +140,7 @@ public:
       BROKER_DEBUG("already subscribed to topic");
       return;
     }
+    ++timestamp_;
     flood_subscriptions();
   }
 
@@ -172,22 +174,25 @@ public:
     publish(content);
   }
 
-  void handle_filter_update(peer_id_list& path, const filter_type& filter,
-                            lamport_timestamp timestamp) {
-    BROKER_TRACE(BROKER_ARG(path)
-                 << BROKER_ARG(filter) << BROKER_ARG(timestamp));
+  void handle_filter_update(peer_id_list& path, vector_timestamp path_ts,
+                            const filter_type& filter) {
+    BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(path_ts) << BROKER_ARG(filter));
     // Drop nonsense messages.
     if (path.empty()) {
-      BROKER_WARNING("drop nonsense message");
+      BROKER_WARNING("drop message: path empty");
+      return;
+    }
+    if (path.size() != path_ts.size()) {
+      BROKER_WARNING("drop message: path and timestamp have different sizes");
       return;
     }
     // Sanity check: we can only receive messages from direct connections.
-    auto forwader = find_row(tbl_, path.back());
-    if (forwader == nullptr) {
+    auto forwarder = find_row(tbl_, path.back());
+    if (forwarder == nullptr) {
       BROKER_WARNING("received subscription from an unrecognized peer");
       return;
     }
-    if (forwader->hdl == nullptr) {
+    if (forwarder->hdl == nullptr) {
       BROKER_WARNING("received subscription from a peer we don't have a direct "
                      " connection to");
       return;
@@ -199,40 +204,44 @@ public:
       return std::any_of(ids.begin(), ids.end(), predicate);
     };
     if (contains(path, dref().id())) {
-      BROKER_DEBUG("drop path containing a loop");
+      BROKER_DEBUG("drop message: path contains a loop");
       return;
     }
+    // The reverse path leads to the sender.
     // TODO: We currently only consider the sender. Theoretically, the path
     //       could contain a yet unknown peer as well. We should receive a
     //       subscription message from those peers eventually, but should we
     //       trigger a discovery here?
     bool learned_new_peer = !reachable(tbl_, path[0]);
-    // The reverse path leads to the sender.
-    add_path(tbl_, path[0], timestamp,
-             peer_id_list{path.rbegin(), path.rend()});
-    // Forward subscription to all peers.
+    auto updated_tbl = add_or_update_path(
+      tbl_, path[0], peer_id_list{path.rbegin(), path.rend()},
+      vector_timestamp{path_ts.rbegin(), path_ts.rend()});
+    BROKER_ASSERT(!learned_new_peer || updated_tbl);
+    if (!updated_tbl) {
+      BROKER_DEBUG("drop message: outdated content");
+      return;
+    }
+    ++timestamp_;
+    // Store the subscription if it's new.
+    const auto& subscriber = path[0];
+    peer_timestamps_[subscriber] = path_ts[0];
+    peer_filters_[subscriber] = filter;
+    // Forward message to all other neighbors.
     path.emplace_back(dref().id());
+    path_ts.emplace_back(timestamp_);
     for_each_direct(tbl_, [&](auto& pid, auto& hdl) {
       if (!contains(path, pid))
-        dref().send(hdl, atom::subscribe::value, path, filter, timestamp);
+        dref().send(hdl, atom::subscribe::value, path, path_ts, filter);
     });
     // If we have larned a new peer, we flood our own subscriptions as well.
     if (learned_new_peer) {
-      BROKER_DEBUG(
-        "got to know a new peer via subscription flooding: " << path[0]);
+      BROKER_DEBUG("learned a new peer via subscription flooding: " << path[0]);
       communication_handle_type dummy;
       dref().peer_connected(path[0], dummy);
       // TODO: This primarly makes sure that eventually all peers know each
       //       other. There may be more efficient ways to ensure connectivity,
       //       though.
       flood_subscriptions();
-    }
-    // Store the subscription if it's new.
-    const auto& subscriber = path[0];
-    auto& ts = peer_timestamps_[subscriber];
-    if (ts < timestamp) {
-      peer_filters_[subscriber] = filter;
-      ts = timestamp;
     }
   }
 

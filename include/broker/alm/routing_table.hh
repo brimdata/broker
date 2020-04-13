@@ -7,6 +7,7 @@
 #include <set>
 #include <utility>
 
+#include "broker/alm/lamport_timestamp.hh"
 #include "broker/optional.hh"
 
 namespace broker::alm {
@@ -24,13 +25,13 @@ public:
 
   using const_iterator = typename container_type::const_iterator;
 
-  routing_path(uint64_t timestamp, container_type content)
+  routing_path(lamport_timestamp timestamp, container_type content)
     : timestamp_(timestamp), content_(std::move(content)) {
     // nop
   }
 
   template <class Iterator>
-  routing_path(uint64_t timestamp, Iterator first, Iterator last)
+  routing_path(lamport_timestamp timestamp, Iterator first, Iterator last)
     : timestamp_(timestamp), content_(first, last) {
     // nop
   }
@@ -127,7 +128,7 @@ public:
   }
 
 private:
-  uint64_t timestamp_ = 0;
+  lamport_timestamp timestamp_;
 
   container_type content_;
 };
@@ -313,7 +314,7 @@ auto* find_row(routing_table<Id, Handle>& tbl,
 template <class Id, class Handle>
 void add_path(routing_table<Id, Handle>& tbl,
               const typename routing_table<Id, Handle>::key_type& peer,
-              uint64_t timestamp, std::vector<Id> path) {
+              lamport_timestamp timestamp, std::vector<Id> path) {
   tbl[peer].paths.emplace(timestamp, std::move(path));
 }
 

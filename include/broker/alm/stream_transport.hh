@@ -25,10 +25,10 @@ namespace broker::alm {
 /// (atom::peer, peer_id_type id, actor hdl) -> void
 /// => start_peering(id, hdl)
 ///
-/// (atom::peer, actor, peer_id_type, filter_type, uint64_t) -> slot
+/// (atom::peer, actor, peer_id_type, filter_type, lamport_timestamp) -> slot
 /// => handle_peering_request(...)
 ///
-/// (stream<node_message>, actor, peer_id_type, filter_type, uint64_t) -> slot
+/// (stream<node_message>, actor, peer_id_type, filter_type, lamport_timestamp) -> slot
 /// => handle_peering_handshake_1(...)
 ///
 /// (stream<node_message>, actor, peer_id_type) -> void
@@ -243,7 +243,7 @@ public:
     dref().async_send(receiver, atm, std::forward<Ts>(xs)...);
   }
 
-  // Published messages use the streams.
+  // Published messages use the stream.
   template <class T>
   void send(const caf::actor& receiver, atom::publish, T msg) {
     dref().stream_send(receiver, msg);
@@ -295,7 +295,7 @@ public:
 
   // Establishes a stream from B to A.
   caf::outbound_stream_slot<message_type, caf::actor, peer_id_type, filter_type,
-                            uint64_t>
+                            lamport_timestamp>
   handle_peering_request(const caf::actor& hdl, const peer_id_type& peer_id) {
     BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(peer_id));
     auto& d = dref();
@@ -326,10 +326,11 @@ public:
 
   // Acks the stream from B to A and establishes a stream from A to B.
   caf::outbound_stream_slot<message_type, atom::ok, caf::actor, peer_id_type,
-                            filter_type, uint64_t>
+                            filter_type, lamport_timestamp>
   handle_peering_handshake_1(caf::stream<message_type> in,
                              const caf::actor& hdl, const peer_id_type& peer_id,
-                             const filter_type& filter, uint64_t timestamp) {
+                             const filter_type& filter,
+                             lamport_timestamp timestamp) {
     BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(peer_id) << BROKER_ARG(filter)
                                  << BROKER_ARG(timestamp));
     auto& d = dref();
@@ -368,10 +369,11 @@ public:
   }
 
   // Acks the stream from A to B.
-  void
-  handle_peering_handshake_2(caf::stream<message_type> in, atom::ok,
-                             const caf::actor& hdl, const peer_id_type& peer_id,
-                             const filter_type& topics, uint64_t timestamp) {
+  void handle_peering_handshake_2(caf::stream<message_type> in, atom::ok,
+                                  const caf::actor& hdl,
+                                  const peer_id_type& peer_id,
+                                  const filter_type& topics,
+                                  lamport_timestamp timestamp) {
     BROKER_TRACE(BROKER_ARG(hdl) << BROKER_ARG(peer_id));
     auto& d = dref();
     // Sanity checking. At this stage, we must have an open output stream but no

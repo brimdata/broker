@@ -43,7 +43,7 @@ struct fixture {
                    std::vector<std::vector<std::string>> paths) {
       auto& entry = tbl.emplace(id, table_type::mapped_type{0}).first->second;
       for (auto& path : paths)
-        entry.paths.emplace(0, path);
+        entry.paths.emplace(alm::lamport_timestamp{}, path);
     };
     add("B", {{"B"}, {"J", "I", "D", "B"}, {"J", "I", "E", "B"}});
     add("D", {{"B", "D"}, {"J", "I", "D"}});

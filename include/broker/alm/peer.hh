@@ -54,7 +54,8 @@ namespace broker::alm {
 /// (atom::publish, node_message msg) -> void
 /// => handle_publication(msg)
 ///
-/// (atom::subscribe, peer_id_list path, filter_type filter, uint64_t t) -> void
+/// (atom::subscribe, peer_id_list path, filter_type filter, lamport_timestamp)
+/// -> void
 /// => handle_filter_update(path, filter, t)
 /// ~~~
 template <class Derived, class PeerId, class CommunicationHandle>
@@ -172,7 +173,7 @@ public:
   }
 
   void handle_filter_update(peer_id_list& path, const filter_type& filter,
-                            uint64_t timestamp) {
+                            lamport_timestamp timestamp) {
     BROKER_TRACE(BROKER_ARG(path)
                  << BROKER_ARG(filter) << BROKER_ARG(timestamp));
     // Drop nonsense messages.
@@ -416,10 +417,10 @@ private:
   routing_table_type tbl_;
 
   /// A logical timestamp.
-  uint64_t timestamp_ = 0;
+  lamport_timestamp timestamp_;
 
   /// Keeps track of the logical timestamps last seen from other peers.
-  std::unordered_map<peer_id_type, uint64_t> peer_timestamps_;
+  std::unordered_map<peer_id_type, lamport_timestamp> peer_timestamps_;
 
   /// Stores prefixes with subscribers on this peer.
   filter_type filter_;

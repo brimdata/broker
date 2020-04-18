@@ -151,6 +151,14 @@ TEST(blacklisting removes revokes paths) {
     REQUIRE(path != nullptr);
     CHECK_EQUAL(*path, ls(J, I, D));
   }
+  MESSAGE("after revoking J -> I, we no longer reach D");
+  {
+    std::vector<std::string> unreachables;
+    auto callback = [&](const auto& x) { unreachables.emplace_back(x); };
+    revoke(tbl, J, alm::lamport_timestamp{2}, I, callback);
+    CHECK_EQUAL(unreachables, ls(D));
+    CHECK_EQUAL(shortest_path(tbl, D), nullptr);
+  }
 }
 
 TEST(blacklisting does not affect newer paths) {

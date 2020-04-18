@@ -5,11 +5,26 @@
 #include "test.hh"
 
 using namespace broker;
+using namespace broker::literals;
 
 namespace {
 
 struct fixture {
   using table_type = alm::routing_table<std::string, int>;
+
+  std::string A = "A";
+
+  std::string B = "B";
+
+  std::string C = "C";
+
+  std::string D = "D";
+
+  std::string E = "E";
+
+  std::string I = "I";
+
+  std::string J = "J";
 
   fixture() {
     // We use the subset of the topology that we use in the peer unit test:
@@ -36,11 +51,11 @@ struct fixture {
         entry.versioned_paths.emplace(std::move(path),
                                       alm::vector_timestamp(path.size()));
     };
-    add("B", {{"B"}, {"J", "I", "D", "B"}, {"J", "I", "E", "B"}});
-    add("D", {{"B", "D"}, {"J", "I", "D"}});
-    add("E", {{"B", "E"}, {"J", "I", "E"}});
-    add("I", {{"B", "E", "I"}, {"B", "D", "I"}, {"J", "I"}});
-    add("J", {{"J"}, {"B", "D", "I", "J"}, {"B", "E", "I", "J"}});
+    add(B, {{B}, {J, I, D, B}, {J, I, E, B}});
+    add(D, {{B, D}, {J, I, D}});
+    add(E, {{B, E}, {J, I, E}});
+    add(I, {{B, E, I}, {B, D, I}, {J, I}});
+    add(J, {{J}, {B, D, I, J}, {B, E, I, J}});
   }
 
   // Creates a list of IDs (strings).
@@ -59,32 +74,100 @@ FIXTURE_SCOPE(routing_table_tests, fixture)
 TEST(erase removes all paths that to and from a peer) {
   MESSAGE("before removing J, the shortest path to I is: J -> I");
   {
-    auto path = shortest_path(tbl, "I");
+    auto path = shortest_path(tbl, I);
     REQUIRE(path != nullptr);
-    CHECK_EQUAL(*path, ls("J", "I"));
+    CHECK_EQUAL(*path, ls(J, I));
   }
   MESSAGE("after removing J, the shortest path to I is: B -> D -> I");
   {
-    erase(tbl, "J");
-    auto path = shortest_path(tbl, "I");
+    erase(tbl, J);
+    auto path = shortest_path(tbl, I);
     REQUIRE(path != nullptr);
-    CHECK_EQUAL(*path, ls("B", "D", "I"));
+    CHECK_EQUAL(*path, ls(B, D, I));
   }
 }
 
 TEST(erase_direct drops the direct path but peers can remain reachable) {
   MESSAGE("before calling erase_direct(B), we reach B in one hop");
   {
-    auto path = shortest_path(tbl, "B");
+    auto path = shortest_path(tbl, B);
     REQUIRE(path != nullptr);
-    CHECK_EQUAL(*path, ls("B"));
+    CHECK_EQUAL(*path, ls(B));
   }
   MESSAGE("after calling erase_direct(B), we need four hops to reach B");
   {
-    erase_direct(tbl, "B");
-    auto path = shortest_path(tbl, "B");
+    erase_direct(tbl, B);
+    auto path = shortest_path(tbl, B);
     REQUIRE(path != nullptr);
-    CHECK_EQUAL(*path, ls("J", "I", "D", "B"));
+    CHECK_EQUAL(*path, ls(J, I, D, B));
+  }
+}
+
+TEST(blacklisted scans pahts for revoked paths){
+  using alm::blacklisted;
+  auto path = ls(A, B, C, D);
+  auto ts = alm::vector_timestamp{{2_lt, 2_lt, 2_lt, 2_lt}};
+  MESSAGE("blacklist entries for X -> Y with timestamp 3 (newer) hit");
+  {
+    CHECK(blacklisted(path, ts, A, 3_lt, B));
+    CHECK(blacklisted(path, ts, B, 3_lt, A));
+    CHECK(blacklisted(path, ts, B, 3_lt, C));
+    CHECK(blacklisted(path, ts, C, 3_lt, B));
+    CHECK(blacklisted(path, ts, C, 3_lt, D));
+    CHECK(blacklisted(path, ts, D, 3_lt, C));
+  }
+  MESSAGE("blacklist entries for X -> Y with timestamp 2 (same) hit");
+  {
+    CHECK(blacklisted(path, ts, A, 2_lt, B));
+    CHECK(blacklisted(path, ts, B, 2_lt, A));
+    CHECK(blacklisted(path, ts, B, 2_lt, C));
+    CHECK(blacklisted(path, ts, C, 2_lt, B));
+    CHECK(blacklisted(path, ts, C, 2_lt, D));
+    CHECK(blacklisted(path, ts, D, 2_lt, C));
+  }
+  MESSAGE("blacklist entries for X -> Y with timestamp 1 (oder) do not hit");
+  {
+    CHECK(not blacklisted(path, ts, A, 1_lt, B));
+    CHECK(not blacklisted(path, ts, B, 1_lt, A));
+    CHECK(not blacklisted(path, ts, B, 1_lt, C));
+    CHECK(not blacklisted(path, ts, C, 1_lt, B));
+    CHECK(not blacklisted(path, ts, C, 1_lt, D));
+    CHECK(not blacklisted(path, ts, D, 1_lt, C));
+  }
+}
+
+TEST(blacklisting removes revokes paths) {
+  MESSAGE("before revoking B -> D, we reach D in two hops");
+  {
+    auto path = shortest_path(tbl, D);
+    REQUIRE(path != nullptr);
+    CHECK_EQUAL(*path, ls(B, D));
+  }
+  MESSAGE("after revoking B -> D, we reach D in three hops");
+  {
+    auto callback = [](const auto&) { FAIL("OnRemovePeer callback called"); };
+    revoke(tbl, B, alm::lamport_timestamp{2}, D, callback);
+    auto path = shortest_path(tbl, D);
+    REQUIRE(path != nullptr);
+    CHECK_EQUAL(*path, ls(J, I, D));
+  }
+}
+
+TEST(blacklisting does not affect newer paths) {
+  MESSAGE("set all timestamps to 3");
+  {
+    for (auto& row : tbl)
+      for (auto& path : row.second.versioned_paths)
+        for (auto& t : path.second)
+          t = 3_lt;
+  }
+  MESSAGE("revoking B -> D with timestamp 2 has no effect");
+  {
+    auto callback = [](const auto&) { FAIL("OnRemovePeer callback called"); };
+    revoke(tbl, B, 2_lt, D, callback);
+    auto path = shortest_path(tbl, D);
+    REQUIRE(path != nullptr);
+    CHECK_EQUAL(*path, ls(B, D));
   }
 }
 

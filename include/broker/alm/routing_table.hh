@@ -5,9 +5,12 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <tuple>
 #include <utility>
 
 #include "broker/alm/lamport_timestamp.hh"
+#include "broker/detail/algorithms.hh"
+#include "broker/detail/assert.hh"
 #include "broker/detail/iterator_range.hh"
 #include "broker/detail/map_index_iterator.hh"
 #include "broker/optional.hh"
@@ -210,6 +213,89 @@ bool add_or_update_path(RoutingTable& tbl,
     versioned_paths.emplace(std::move(path), std::move(ts));
     return true;
   }
+}
+
+/// A 3-tuple for storing a revoked path between two peers with the logical time
+/// when the connection was severed.
+template <class PeerId>
+struct blacklist_entry {
+  /// The source of the event.
+  PeerId revoker;
+
+  /// Time of the connection loss, as seen by `revoker`.
+  lamport_timestamp ts;
+
+  /// The disconnected hop.
+  PeerId hop;
+};
+
+/// @relates blacklist_entry
+template <class PeerId>
+bool operator<(const blacklist_entry<PeerId>& x,
+               const blacklist_entry<PeerId>& y) noexcept {
+  return std::tie(x.revoker, x.ts, x.hop) < std::tie(y.revoker, y.ts, y.hop);
+}
+
+/// A list for storing path revocations.
+template <class PeerId>
+using blacklist = std::vector<blacklist_entry<PeerId>>;
+
+/// Checks whether `path` routes through either `revoker -> hop` or
+/// `hop -> revoker` with a timestamp <= `revoke_time`.
+template <class PeerId>
+bool blacklisted(const std::vector<PeerId>& path,
+                 const vector_timestamp& path_ts, const PeerId& revoker,
+                 lamport_timestamp ts, const PeerId& hop) {
+  BROKER_ASSERT(path.size() == path_ts.size());
+  // Short-circuit trivial cases.
+  if (path.size() <= 1)
+    return false;
+  // Scan for the revoker anywhere in the path and see if it's next to the
+  // revoked hop.
+  if (path.front() == revoker)
+    return path_ts.front() <= ts && path[1] == hop;
+  for (size_t index = 1; index < path.size() - 1; ++index)
+    if (path[index] == revoker)
+      return path_ts[index] <= ts
+             && (path[index - 1] == hop || path[index + 1] == hop);
+  if (path.back() == revoker)
+    return path_ts.back() <= ts && path[path.size() - 2] == hop;
+  return false;
+}
+
+/// @copydoc blacklisted
+template <class PeerId>
+bool blacklisted(const std::vector<PeerId>& path, const vector_timestamp& ts,
+                 const blacklist_entry<PeerId>& entry) {
+  return blacklisted(path, ts, entry.revoker, entry.timestamp,
+                     entry.revoked_hop);
+}
+
+/// Removes all entries form `tbl` where `blacklisted` returns true for given
+/// arguments.
+template <class PeerId, class Handle, class OnRemovePeer>
+void revoke(routing_table<PeerId, Handle>& tbl, const PeerId& revoker,
+            lamport_timestamp revoke_time, const PeerId& hop,
+            OnRemovePeer callback) {
+  auto i = tbl.begin();
+  while (i != tbl.end()) {
+    detail::erase_if(i->second.versioned_paths, [&](auto& kvp) {
+      return blacklisted(kvp.first, kvp.second, revoker, revoke_time, hop);
+    });
+    if (i->second.versioned_paths.empty()) {
+      callback(i->first);
+      i = tbl.erase(i);
+    } else {
+      ++i;
+    }
+  }
+}
+
+/// @copydoc revoke
+template <class PeerId, class Handle, class OnRemovePeer>
+void revoke(routing_table<PeerId, Handle>& tbl,
+            const blacklist_entry<PeerId>& entry, OnRemovePeer callback) {
+  return revoke(tbl.entry.revoker, entry.ts, entry.hop, callback);
 }
 
 } // namespace broker::alm

@@ -55,3 +55,11 @@ typename Inspector::result_type inspect(Inspector& f, lamport_timestamp& x) {
 using vector_timestamp = std::vector<lamport_timestamp>;
 
 } // namespace broker::alm
+
+namespace broker::literals {
+
+constexpr auto operator""_lt(unsigned long long value) noexcept {
+  return alm::lamport_timestamp{static_cast<uint64_t>(value)};
+}
+
+} // namespace broker::literals

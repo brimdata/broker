@@ -208,20 +208,19 @@ public:
       return;
     }
     // The reverse path leads to the sender.
-    // TODO: We currently only consider the sender. Theoretically, the path
-    //       could contain a yet unknown peer as well. We should receive a
-    //       subscription message from those peers eventually, but should we
-    //       trigger a discovery here?
-    bool learned_new_peer = !reachable(tbl_, path[0]);
-    auto updated_tbl = add_or_update_path(
+    auto is_new = [this](const auto& id) { return !reachable(tbl_, id); };
+    bool learned_new_peer = std::any_of(path.begin(), path.end(), is_new);
+    auto added_tbl_entry = add_or_update_path(
       tbl_, path[0], peer_id_list{path.rbegin(), path.rend()},
       vector_timestamp{path_ts.rbegin(), path_ts.rend()});
-    BROKER_ASSERT(!learned_new_peer || updated_tbl);
-    if (!updated_tbl) {
-      BROKER_DEBUG("drop message: outdated content");
-      return;
+    BROKER_ASSERT(!learned_new_peer || added_tbl_entry);
+    // We increase our own timestamp only if we have changed the routing table .
+    // Otherwise, we would cause infinite flooding, because the peers would
+    // never agree on a vector time.
+    if (added_tbl_entry) {
+      BROKER_DEBUG("increase local time");
+      ++timestamp_;
     }
-    ++timestamp_;
     // Store the subscription if it's new.
     const auto& subscriber = path[0];
     peer_timestamps_[subscriber] = path_ts[0];

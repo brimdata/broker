@@ -197,6 +197,7 @@ auto* find_row(routing_table<Id, Handle>& tbl,
 
 /// Adds a path to the peer, inserting a new row for the peer is it does not
 /// exist yet.
+/// @return `true` if a new entry was added to `tbl`, `false` otherwise.
 template <class RoutingTable>
 bool add_or_update_path(RoutingTable& tbl,
                         const typename RoutingTable::key_type& peer,
@@ -204,15 +205,12 @@ bool add_or_update_path(RoutingTable& tbl,
                         vector_timestamp ts) {
   auto& versioned_paths = tbl[peer].versioned_paths;
   if (auto i = versioned_paths.find(path); i != versioned_paths.end()) {
-    if (i->second < ts) {
+    if (i->second < ts)
       i->second = std::move(ts);
-      return true;
-    }
     return false;
-  } else {
-    versioned_paths.emplace(std::move(path), std::move(ts));
-    return true;
   }
+  versioned_paths.emplace(std::move(path), std::move(ts));
+  return true;
 }
 
 /// A 3-tuple for storing a revoked path between two peers with the logical time

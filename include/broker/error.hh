@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 #include <caf/atom.hpp>
@@ -59,8 +60,22 @@ enum class ec : uint8_t {
   end_of_file,
   /// Received an unknown type tag value.
   invalid_tag,
+  /// Deserialized an invalid status.
+  invalid_status,
 };
 // --ec-enum-end
+
+/// Evaluates to `true` if an ::error with code `E` can contain a `network_info`
+/// in its context.
+/// @relates ec
+template <ec E>
+constexpr bool ec_has_network_info_v
+  = E == ec::peer_invalid || E == ec::peer_unavailable
+    || E == ec::peer_disconnect_during_handshake;
+
+/// @relates ec
+template <ec Value>
+using ec_constant = std::integral_constant<ec, Value>;
 
 /// @relates ec
 const char* to_string(ec code) noexcept;

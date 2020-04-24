@@ -111,6 +111,15 @@ bool reachable(const RoutingTable& tbl,
   return tbl.count(peer) != 0;
 }
 
+/// Returns whether `tbl` contains a direct connection to `peer`.
+template <class RoutingTable>
+bool direct_connection(const RoutingTable& tbl,
+                       const typename RoutingTable::key_type& peer) {
+  if (auto i = tbl.find(peer); i != tbl.end())
+    return static_cast<bool>(i->second.hdl);
+  return false;
+}
+
 /// Returns the hop count on the shortest path or `nil` if no route to the peer
 /// exists.
 template <class RoutingTable>
@@ -121,50 +130,83 @@ optional<size_t> distance_to(const RoutingTable& tbl,
   return nil;
 }
 
-/// Erases connection state for a direct connection. Routing paths to the peer
-/// may still remain on the table if the peer is reachable through others.
-/// @returns `true` if a direct connection was removed, `false` otherwise.
-template <class RoutingTable>
-bool erase_direct(RoutingTable& tbl,
-                  const typename RoutingTable::key_type& peer) {
-  using mapped_type = typename RoutingTable::mapped_type;
-  using handle_type = typename mapped_type::communication_handle_type;
-  if (auto i = tbl.find(peer); i != tbl.end()) {
-    auto& row = i->second;
-    if constexpr (std::is_integral<handle_type>::value)
-      row.hdl = 0;
-    else
-      row.hdl = nullptr;
-    for (auto i = row.versioned_paths.begin(); i != row.versioned_paths.end();) {
-      auto& path = i->first;
-      if (path[0] == peer)
-        i = row.versioned_paths.erase(i);
-      else
-        ++i;
+/// Erases all state for `whom` and also removes all paths that include `whom`.
+/// Other peers can become unreachable as a result. In this case, the algorithm
+/// calls `on_remove` and recurses for all unreachable peers.
+template <class RoutingTable, class OnRemovePeer>
+void erase(RoutingTable& tbl, const typename RoutingTable::key_type& whom,
+           OnRemovePeer on_remove) {
+  using id_type = typename RoutingTable::key_type;
+  std::vector<id_type> unreachable_peers;
+  auto impl = [&](const id_type& peer) {
+    auto stale = [&](const auto& path) {
+      return std::find(path.begin(), path.end(), peer) != path.end();
+    };
+    tbl.erase(peer);
+    for (auto& [id, row] : tbl) {
+      auto& paths = row.versioned_paths;
+      for (auto i = paths.begin(); i != paths.end();) {
+        if (stale(i->first))
+          i = paths.erase(i);
+        else
+          ++i;
+      }
+      if (paths.empty())
+        unreachable_peers.emplace_back(id);
     }
-    if (row.versioned_paths.empty())
-      tbl.erase(peer);
-    return true;
+  };
+  impl(whom);
+  while (!unreachable_peers.empty()) {
+    // Our lambda modifies unreachable_peers, so we can't use iterators here.
+    id_type peer = std::move(unreachable_peers.back());
+    unreachable_peers.pop_back();
+    impl(peer);
+    on_remove(peer);
   }
-  return false;
 }
 
-/// Erases all state for the peer.
-template <class RoutingTable>
-void erase(RoutingTable& tbl, const typename RoutingTable::key_type& peer) {
-  auto stale = [&](const auto& path) {
-    return std::find(path.begin(), path.end(), peer) != path.end();
-  };
-  tbl.erase(peer);
-  for (auto& kvp : tbl) {
-    auto& paths = kvp.second.versioned_paths;
-    for (auto i = paths.begin(); i != paths.end();) {
-      if (stale(i->first))
-        i = paths.erase(i);
+/// Erases connection state for a direct connection to `whom`. Routing paths to
+/// `whom` may still remain in the table if `whom` is reachable through others.
+/// Other peers can become unreachable as a result. In this case, the algorithm
+/// calls `on_remove` and recurses for all unreachable peers.
+/// @returns `true` if a direct connection was removed, `false` otherwise.
+/// @note The callback `on_remove` gets called while changing the routing table.
+///       Hence, it must not mutate the routing table and ideally doesn't access
+///       it at all.
+template <class RoutingTable, class OnRemovePeer>
+bool erase_direct(RoutingTable& tbl,
+                  const typename RoutingTable::key_type& whom,
+                  OnRemovePeer on_remove) {
+  using mapped_type = typename RoutingTable::mapped_type;
+  using handle_type = typename mapped_type::communication_handle_type;
+  // Reset the connection handle.
+  if (auto i = tbl.find(whom); i == tbl.end()) {
+    return false;
+  } else {
+    auto& hdl = i->second.hdl;
+    if constexpr (std::is_integral<handle_type>::value)
+      hdl = 0;
+    else
+      hdl = nullptr;
+  }
+  // Drop all paths with whom as first hop.
+  for (auto i = tbl.begin(); i != tbl.end();) {
+    auto& paths = i->second.versioned_paths;
+    for (auto j = paths.begin(); j != paths.end();) {
+      auto& path = j->first;
+      if (path[0] == whom)
+        j = paths.erase(j);
       else
-        ++i;
+        ++j;
+    }
+    if (paths.empty()) {
+      on_remove(i->first);
+      i = tbl.erase(i);
+    } else {
+      ++i;
     }
   }
+  return true;
 }
 
 template <class Id, class Handle, class F>

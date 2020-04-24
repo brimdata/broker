@@ -280,6 +280,7 @@ struct triangle_fixture : global_fixture {
     base_fixture::deinit_socket_api();
   }
 
+  // Connect mercury to venus and earth.
   void connect_peers() {
     MESSAGE("prepare connections");
     auto server_handle = mercury.make_accept_handle();
@@ -327,12 +328,12 @@ CAF_TEST(topic_prefix_matching_async_subscribe) {
   MESSAGE("assume two peers for venus");
   venus.loop_after_next_enqueue();
   auto venus_peers = venus.ep.peers();
-  CAF_REQUIRE_EQUAL(venus_peers.size(), 2u);
+  CAF_REQUIRE_EQUAL(venus_peers.size(), 1u);
   CAF_CHECK_EQUAL(venus_peers.front().status, peer_status::peered);
   MESSAGE("assume two peers for earth");
   earth.loop_after_next_enqueue();
   auto earth_peers = earth.ep.peers();
-  CAF_REQUIRE_EQUAL(earth_peers.size(), 2u);
+  CAF_REQUIRE_EQUAL(earth_peers.size(), 1u);
   CAF_CHECK_EQUAL(earth_peers.front().status, peer_status::peered);
   MESSAGE("subscribe to 'zeek/events' on venus");
   venus.subscribe_to("zeek/events");
@@ -378,12 +379,12 @@ CAF_TEST(topic_prefix_matching_make_subscriber) {
   MESSAGE("assume two peers for venus");
   venus.loop_after_next_enqueue();
   auto venus_peers = venus.ep.peers();
-  CAF_REQUIRE_EQUAL(venus_peers.size(), 2u);
+  CAF_REQUIRE_EQUAL(venus_peers.size(), 1u);
   CAF_CHECK_EQUAL(venus_peers.front().status, peer_status::peered);
   MESSAGE("assume two peers for earth");
   earth.loop_after_next_enqueue();
   auto earth_peers = earth.ep.peers();
-  CAF_REQUIRE_EQUAL(earth_peers.size(), 2u);
+  CAF_REQUIRE_EQUAL(earth_peers.size(), 1u);
   CAF_CHECK_EQUAL(earth_peers.front().status, peer_status::peered);
   MESSAGE("subscribe to 'zeek/events' on venus");
   auto venus_s1 = venus.ep.make_subscriber({"zeek/events"});
@@ -471,10 +472,20 @@ std::vector<code> event_log(std::initializer_list<code> xs) {
 }
 
 std::vector<code> event_log(const std::vector<event_value>& xs) {
+  // For the purpose of this test, we only care about the peer_* statuses.
+  auto predicate = [](const auto& x) {
+    if constexpr (std::is_same<std::decay_t<decltype(x)>, status>::value) {
+      auto c = x.code();
+      return c == sc::peer_added || c == sc::peer_removed || c == sc::peer_lost;
+    } else {
+      return true;
+    }
+  };
   std::vector<code> ys;
   ys.reserve(xs.size());
   for (auto& x : xs)
-    ys.emplace_back(x);
+    if (caf::visit(predicate, x))
+      ys.emplace_back(x);
   return ys;
 }
 

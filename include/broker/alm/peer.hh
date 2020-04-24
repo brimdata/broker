@@ -208,12 +208,15 @@ public:
       return;
     }
     // The reverse path leads to the sender.
+    std::vector<peer_id_type> new_peers;
     auto is_new = [this](const auto& id) { return !reachable(tbl_, id); };
-    bool learned_new_peer = std::any_of(path.begin(), path.end(), is_new);
+    for (const auto& id : path)
+      if (is_new(id))
+        new_peers.emplace_back(id);
     auto added_tbl_entry = add_or_update_path(
       tbl_, path[0], peer_id_list{path.rbegin(), path.rend()},
       vector_timestamp{path_ts.rbegin(), path_ts.rend()});
-    BROKER_ASSERT(!learned_new_peer || added_tbl_entry);
+    BROKER_ASSERT(new_peers.empty() || added_tbl_entry);
     // We increase our own timestamp only if we have changed the routing table .
     // Otherwise, we would cause infinite flooding, because the peers would
     // never agree on a vector time.
@@ -233,10 +236,10 @@ public:
         dref().send(hdl, atom::subscribe::value, path, path_ts, filter);
     });
     // If we have larned a new peer, we flood our own subscriptions as well.
-    if (learned_new_peer) {
-      BROKER_DEBUG("learned a new peer via subscription flooding: " << path[0]);
-      communication_handle_type dummy;
-      dref().peer_connected(path[0], dummy);
+    if (!new_peers.empty()) {
+      BROKER_DEBUG("learned new peers: " << new_peers);
+      for (auto& id : new_peers)
+        dref().peer_discovered(id);
       // TODO: This primarly makes sure that eventually all peers know each
       //       other. There may be more efficient ways to ensure connectivity,
       //       though.
@@ -320,6 +323,14 @@ public:
     // nop
   }
 
+  /// Called whenever this peer discovers a new peer in the network.
+  /// @param peer_id ID of the new peer.
+  /// @note The new peer gets stored in the routing table *before* calling this
+  ///       member function.
+  void peer_discovered([[maybe_unused]] const peer_id_type& peer_id) {
+    // nop
+  }
+
   /// Called whenever this peer established a new connection.
   /// @param peer_id ID of the newly connected peer.
   /// @param hdl Communication handle for exchanging messages with the new peer.
@@ -352,8 +363,16 @@ public:
   void peer_removed([[maybe_unused]] const peer_id_type& peer_id,
                     [[maybe_unused]] const communication_handle_type& hdl) {
     BROKER_TRACE(BROKER_ARG(peer_id) << BROKER_ARG(hdl));
-    if (erase_direct(tbl_, peer_id) && !reachable(tbl_, peer_id))
-      peer_filters_.erase(peer_id);
+    auto on_drop = [this](const peer_id_type& whom) {
+      dref().peer_unreachable(whom);
+    };
+    erase_direct(tbl_, peer_id, on_drop);
+  }
+
+  /// Called after removing the last path to `peer_id` from the routing table.
+  /// @param peer_id ID of the (now unreachable) peer.
+  void peer_unreachable([[maybe_unused]] const peer_id_type& peer_id) {
+    peer_filters_.erase(peer_id);
   }
 
   /// Called whenever the user tried to unpeer from an unknown peer.

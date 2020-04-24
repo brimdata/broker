@@ -67,6 +67,10 @@ struct fixture {
   alm::routing_table<std::string, int> tbl;
 };
 
+void nop(const std::string&) {
+  // nop
+}
+
 } // namespace
 
 FIXTURE_SCOPE(routing_table_tests, fixture)
@@ -80,7 +84,7 @@ TEST(erase removes all paths that to and from a peer) {
   }
   MESSAGE("after removing J, the shortest path to I is: B -> D -> I");
   {
-    erase(tbl, J);
+    erase(tbl, J, nop);
     auto path = shortest_path(tbl, I);
     REQUIRE(path != nullptr);
     CHECK_EQUAL(*path, ls(B, D, I));
@@ -96,7 +100,7 @@ TEST(erase_direct drops the direct path but peers can remain reachable) {
   }
   MESSAGE("after calling erase_direct(B), we need four hops to reach B");
   {
-    erase_direct(tbl, B);
+    erase_direct(tbl, B, nop);
     auto path = shortest_path(tbl, B);
     REQUIRE(path != nullptr);
     CHECK_EQUAL(*path, ls(J, I, D, B));

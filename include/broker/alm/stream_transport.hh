@@ -112,6 +112,10 @@ public:
 
   // -- properties -------------------------------------------------------------
 
+  auto tbl() noexcept -> decltype(super::tbl()) {
+    return super::tbl();
+  }
+
   caf::event_based_actor* self() noexcept {
     // Our only constructor accepts an event-based actor. Hence, we know for
     // sure that this case is safe, even though the base type stores self_ as a
@@ -276,7 +280,7 @@ public:
           [=](caf::error& err) mutable { rp.deliver(std::move(err)); });
       return;
     }
-    if (d.tbl().count(remote_peer) != 0) {
+    if (direct_connection(tbl(), remote_peer)) {
       BROKER_INFO("start_peering ignored: already peering with "
                   << remote_peer);
       return;
@@ -305,7 +309,7 @@ public:
       return {};
     }
     // Check whether there's already a peering relation established or underway.
-    if (dref().tbl().count(peer_id) > 0) {
+    if (direct_connection(tbl(), peer_id)) {
       BROKER_DEBUG("drop peering request: already have a direct connection to"
                    << peer_id);
       return {};
@@ -345,12 +349,15 @@ public:
                    << peer_id);
       return {};
     }
+    // Trigger discovery event if this peer is new.
+    auto trigger_peer_discovered = !reachable(tbl(), peer_id);
     // Add routing table entry for this direct connection.
-    if (!d.tbl().emplace(peer_id, hdl).second) {
+    if (direct_connection(tbl(), peer_id)) {
       BROKER_ERROR("drop handshake #1: already have a direct connection to"
                    << peer_id);
       return {};
     }
+    tbl()[peer_id].hdl = hdl;
     // Store filter and announce the new path.
     std::vector<peer_id_type> path{peer_id};
     vector_timestamp path_ts{timestamp};
@@ -365,6 +372,8 @@ public:
     auto islot = d.add_unchecked_inbound_path(in);
     hdl_to_ostream_[hdl] = oslot;
     hdl_to_istream_[hdl] = islot;
+    if (trigger_peer_discovered)
+      d.peer_discovered(peer_id);
     d.peer_connected(peer_id, hdl);
     return oslot;
   }
@@ -392,12 +401,17 @@ public:
                    << peer_id);
       return;
     }
+    // Trigger discovery event if this peer is new.
+    auto trigger_peer_discovered = !reachable(tbl(), peer_id);
     // Add routing table entry for this direct connection.
-    if (!d.tbl().emplace(peer_id, hdl).second) {
+    if (direct_connection(tbl(), peer_id)) {
       BROKER_ERROR("drop handshake #1: already have a direct connection to"
                    << peer_id);
       return;
     }
+    tbl()[peer_id].hdl = hdl;
+    if (trigger_peer_discovered)
+      d.peer_discovered(peer_id);
     d.peer_connected(peer_id, hdl);
     // Add inbound streaming slot for this connection.
     hdl_to_istream_[hdl] = d.add_unchecked_inbound_path(in);
@@ -509,8 +523,8 @@ public:
         auto predicate = [&](const auto& kvp) {
           return kvp.second.hdl == rebind_from;
         };
-        auto e = dref().tbl().end();
-        auto i = std::find_if(dref().tbl().begin(), e, predicate);
+        auto e = tbl().end();
+        auto i = std::find_if(tbl().begin(), e, predicate);
         if (i == e) {
           BROKER_WARNING("received an ack_open but no table entry exists");
           return false;
@@ -631,7 +645,7 @@ protected:
     // table. Since some implementations of peer_removed may still query the
     // routing table, we only check whether peer_id exists in the routing table
     // rather than calling `erase`.
-    cleanup_steps += super::tbl().count(peer_id);
+    cleanup_steps += tbl().count(peer_id);
     if (cleanup_steps > 0)
       dref().peer_removed(peer_id, hdl);
     else
@@ -641,8 +655,7 @@ protected:
   /// Disconnects a peer by demand of the user.
   void unpeer(const peer_id_type& peer_id) {
     BROKER_TRACE(BROKER_ARG(peer_id));
-    auto& tbl = super::tbl();
-    if (auto i = tbl.find(peer_id); i != tbl.end()) {
+    if (auto i = tbl().find(peer_id); i != tbl().end()) {
       auto hdl = i->second.hdl;
       dref().unpeer(peer_id, hdl);
       return;
@@ -659,7 +672,7 @@ protected:
   /// Disconnects a peer by demand of the user.
   void unpeer(const caf::actor& hdl) {
     BROKER_TRACE(BROKER_ARG(hdl));
-    if (auto peer_id = get_peer_id(super::tbl(), hdl)) {
+    if (auto peer_id = get_peer_id(tbl(), hdl)) {
       dref().unpeer(*peer_id, hdl);
       return;
     }
@@ -711,7 +724,7 @@ protected:
     }
     // Fetch the node ID from the routing table and invoke callbacks.
     auto& d = dref();
-    if (auto peer_id = get_peer_id(d.tbl(), hdl)) {
+    if (auto peer_id = get_peer_id(tbl(), hdl)) {
       // peer::peer_disconnected ultimately removes the entry from the table.
       d.peer_disconnected(*peer_id, hdl, reason);
     } else {

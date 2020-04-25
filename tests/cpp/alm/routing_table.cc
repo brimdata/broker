@@ -183,4 +183,35 @@ TEST(blacklisting does not affect newer paths) {
   }
 }
 
+TEST(inseting into blacklists creates a sorted list) {
+  using blacklist = alm::blacklist<std::string>;
+  blacklist lst;
+  auto to_blacklist = [](auto range) {
+    return blacklist(range.first, range.second);
+  };
+  MESSAGE("filling the list with new entries inserts");
+  CHECK(emplace(lst, A, 1_lt, B).second);
+  CHECK(emplace(lst, C, 2_lt, A).second);
+  CHECK(emplace(lst, A, 3_lt, B).second);
+  CHECK(emplace(lst, C, 1_lt, A).second);
+  CHECK(emplace(lst, B, 7_lt, A).second);
+  CHECK(emplace(lst, A, 2_lt, C).second);
+  MESSAGE("inserting twice is a no-op");
+  CHECK(not emplace(lst, A, 1_lt, B).second);
+  CHECK(not emplace(lst, B, 7_lt, A).second);
+  MESSAGE("the final list is sorted on revoker, ts, hop");
+  CHECK_EQUAL(lst, blacklist({{A, 1_lt, B},
+                              {A, 2_lt, C},
+                              {A, 3_lt, B},
+                              {B, 7_lt, A},
+                              {C, 1_lt, A},
+                              {C, 2_lt, A}}));
+  MESSAGE("equal_range allows access to subranges by revoker");
+  CHECK_EQUAL(to_blacklist(equal_range(lst, A)),
+              blacklist({{A, 1_lt, B}, {A, 2_lt, C}, {A, 3_lt, B}}));
+  CHECK_EQUAL(to_blacklist(equal_range(lst, B)), blacklist({{B, 7_lt, A}}));
+  CHECK_EQUAL(to_blacklist(equal_range(lst, C)),
+              blacklist({{C, 1_lt, A}, {C, 2_lt, A}}));
+}
+
 FIXTURE_SCOPE_END()

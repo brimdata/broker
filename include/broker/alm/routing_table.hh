@@ -271,14 +271,78 @@ struct blacklist_entry {
 
 /// @relates blacklist_entry
 template <class PeerId>
+bool operator==(const blacklist_entry<PeerId>& x,
+                const blacklist_entry<PeerId>& y) noexcept {
+  return std::tie(x.revoker, x.ts, x.hop) == std::tie(y.revoker, y.ts, y.hop);
+}
+
+/// @relates blacklist_entry
+template <class PeerId>
+bool operator!=(const blacklist_entry<PeerId>& x,
+                const blacklist_entry<PeerId>& y) noexcept {
+  return !(x == y);
+}
+
+/// @relates blacklist_entry
+template <class PeerId>
 bool operator<(const blacklist_entry<PeerId>& x,
                const blacklist_entry<PeerId>& y) noexcept {
   return std::tie(x.revoker, x.ts, x.hop) < std::tie(y.revoker, y.ts, y.hop);
 }
 
-/// A list for storing path revocations.
+/// @relates blacklist_entry
+template <class PeerId, class Revoker, class Timestamp, class Hop>
+bool operator<(const blacklist_entry<PeerId>& x,
+               const std::tuple<Revoker, Timestamp, Hop>& y) noexcept {
+  return std::tie(x.revoker, x.ts, x.hop) < y;
+}
+
+/// @relates blacklist_entry
+template <class PeerId, class Revoker, class Timestamp, class Hop>
+bool operator<(const std::tuple<Revoker, Timestamp, Hop>& x,
+               const blacklist_entry<PeerId>& y) noexcept {
+  return x < std::tie(y.revoker, y.ts, y.hop);
+}
+
+/// @relates blacklist_entry
+template <class Inspector, class Id>
+typename Inspector::result_type inspect(Inspector& f, blacklist_entry<Id>& x) {
+  return f(caf::meta::type_name("blacklist_entry"), x.revoker, x.ts, x.hop);
+}
+
+/// A container for storing path revocations, sorted by `revoker` then `ts` then
+/// `hop`.
 template <class PeerId>
 using blacklist = std::vector<blacklist_entry<PeerId>>;
+
+/// Inserts a new entry into the sorted blacklist constructed in-place with the
+/// given args if this entry does not exist yet.
+template <class PeerId, class Revoker, class Hop>
+auto emplace(blacklist<PeerId>& lst, Revoker&& revoker, lamport_timestamp ts,
+             Hop&& hop) {
+  auto i = std::lower_bound(lst.begin(), lst.end(), std::tie(revoker, ts, hop));
+  if (i == lst.end() || i->revoker != revoker || i->ts != ts || i->hop != hop) {
+    auto j = lst.emplace(i,
+                         blacklist_entry<PeerId>{std::forward<Revoker>(revoker),
+                                                 ts, std::forward<Hop>(hop)});
+    return std::make_pair(j, true);
+  }
+  return std::make_pair(i, false);
+}
+
+template <class PeerId, class Revoker>
+auto equal_range(blacklist<PeerId>& lst, const Revoker& revoker) {
+  auto key_less = [](const auto& x, const auto& y) {
+    if constexpr (std::is_same<std::decay_t<decltype(y)>, Revoker>::value)
+      return x.revoker < y;
+    else
+      return x < y.revoker;
+  };
+  auto i = std::lower_bound(lst.begin(), lst.end(), revoker, key_less);
+  if (i == lst.end())
+    return std::make_pair(i, i);
+  return std::make_pair(i, std::upper_bound(i, lst.end(), revoker, key_less));
+}
 
 /// Checks whether `path` routes through either `revoker -> hop` or
 /// `hop -> revoker` with a timestamp <= `revoke_time`.

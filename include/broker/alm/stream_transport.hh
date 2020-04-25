@@ -241,9 +241,15 @@ public:
     self()->send(receiver, std::forward<Ts>(xs)...);
   }
 
-  // Subscriptions bypass the stream.
+  // Subscriptions use flooding.
   template <class... Ts>
   void send(const caf::actor& receiver, atom::subscribe atm, Ts&&... xs) {
+    dref().async_send(receiver, atm, std::forward<Ts>(xs)...);
+  }
+
+  // Path revocations use flooding.
+  template <class... Ts>
+  void send(const caf::actor& receiver, atom::revoke atm, Ts&&... xs) {
     dref().async_send(receiver, atm, std::forward<Ts>(xs)...);
   }
 

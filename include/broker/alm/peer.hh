@@ -57,6 +57,9 @@ namespace broker::alm {
 /// (atom::subscribe, peer_id_list path, filter_type filter, lamport_timestamp)
 /// -> void
 /// => handle_filter_update(path, filter, t)
+///
+/// (atom::revoke, revoker, ts, hop) -> void
+/// => handle_path_revocation(revoker, ts, hop)
 /// ~~~
 template <class Derived, class PeerId, class CommunicationHandle>
 class peer {
@@ -74,6 +77,8 @@ public:
   using message_type = generic_node_message<peer_id_type>;
 
   using multipath_type = multipath<peer_id_type>;
+
+  using blacklist_type = blacklist<peer_id_type>;
 
   // -- properties -------------------------------------------------------------
 
@@ -121,10 +126,16 @@ public:
     return false;
   }
 
-  // -- publish and subscribe functions ----------------------------------------
+  static bool contains(const std::vector<peer_id_type>& ids,
+                       const peer_id_type& id) {
+    auto predicate = [&](const peer_id_type& pid) { return pid == id; };
+    return std::any_of(ids.begin(), ids.end(), predicate);
+  }
+
+  // -- flooding ---------------------------------------------------------------
 
   /// Floods the subscriptions on this peer to all other peers.
-  /// @note The functions does *not* bump the Lamport timestamp before sending.
+  /// @note The functions *does not* bump the Lamport timestamp before sending.
   void flood_subscriptions() {
     peer_id_list path{dref().id()};
     vector_timestamp ts{timestamp_};
@@ -132,6 +143,21 @@ public:
       dref().send(hdl, atom::subscribe::value, path, ts, filter_);
     });
   }
+
+  /// Floods a path revocation to all other peers.
+  /// @note The functions does *not* bump the Lamport timestamp before sending.
+  void flood_path_revocation(const peer_id_type& lost_peer) {
+    // We bundle path revocation and subscription flooding, because other peers
+    // in the network could drop in-flight subscription updates after seeing a
+    // newer timestamp with the path revocation.
+    peer_id_list path{dref().id()};
+    vector_timestamp ts{timestamp_};
+    for_each_direct(tbl_, [&, this](const auto& id, const auto& hdl) {
+      dref().send(hdl, atom::revoke::value, path, ts, lost_peer, filter_);
+    });
+  }
+
+  // -- publish and subscribe functions ----------------------------------------
 
   void subscribe(const filter_type& what) {
     BROKER_TRACE(BROKER_ARG(what));
@@ -174,39 +200,46 @@ public:
     publish(content);
   }
 
-  void handle_filter_update(peer_id_list& path, vector_timestamp path_ts,
-                            const filter_type& filter) {
-    BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(path_ts) << BROKER_ARG(filter));
-    // Drop nonsense messages.
+  /// Checks whether a path and its associated vector timestamp are non-empty
+  /// and loop-free.
+  bool valid (peer_id_list& path, vector_timestamp path_ts) {
+    // Drop if empty or if path and path_ts have different sizes.
     if (path.empty()) {
       BROKER_WARNING("drop message: path empty");
-      return;
+      return false;
     }
     if (path.size() != path_ts.size()) {
       BROKER_WARNING("drop message: path and timestamp have different sizes");
-      return;
+      return false;
     }
     // Sanity check: we can only receive messages from direct connections.
     auto forwarder = find_row(tbl_, path.back());
     if (forwarder == nullptr) {
-      BROKER_WARNING("received subscription from an unrecognized peer");
-      return;
+      BROKER_WARNING("received message from an unrecognized peer");
+      return false;
     }
     if (forwarder->hdl == nullptr) {
-      BROKER_WARNING("received subscription from a peer we don't have a direct "
+      BROKER_WARNING("received message from a peer we don't have a direct "
                      " connection to");
-      return;
+      return false;
     }
     // Drop all paths that contain loops.
-    auto contains = [](const std::vector<peer_id_type>& ids,
-                       const peer_id_type& id) {
-      auto predicate = [&](const peer_id_type& pid) { return pid == id; };
-      return std::any_of(ids.begin(), ids.end(), predicate);
-    };
     if (contains(path, dref().id())) {
       BROKER_DEBUG("drop message: path contains a loop");
-      return;
+      return false;
     }
+    return true;
+  }
+
+  /// Adds the reverse `path` to the routing table and stores the subscription
+  /// if it is new.
+  /// @returns A pair containing a list of new peers learned through the update
+  ///          and a boolean that is set to `true` if this update increased the
+  ///          local time.
+  /// @note increases the local time if the routing table changes.
+  std::pair<std::vector<peer_id_type>, bool>
+  handle_update(peer_id_list& path, vector_timestamp path_ts,
+                const filter_type& filter) {
     // The reverse path leads to the sender.
     std::vector<peer_id_type> new_peers;
     auto is_new = [this](const auto& id) { return !reachable(tbl_, id); };
@@ -228,6 +261,16 @@ public:
     const auto& subscriber = path[0];
     peer_timestamps_[subscriber] = path_ts[0];
     peer_filters_[subscriber] = filter;
+    return {std::move(new_peers), added_tbl_entry};
+  }
+
+  void handle_filter_update(peer_id_list& path, vector_timestamp path_ts,
+                            const filter_type& filter) {
+    BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(path_ts) << BROKER_ARG(filter));
+    // Handle message content (drop nonsense messages).
+    if (!valid(path, path_ts))
+      return;
+    auto new_peers = std::move(handle_update(path, path_ts, filter).first);
     // Forward message to all other neighbors.
     path.emplace_back(dref().id());
     path_ts.emplace_back(timestamp_);
@@ -235,7 +278,7 @@ public:
       if (!contains(path, pid))
         dref().send(hdl, atom::subscribe::value, path, path_ts, filter);
     });
-    // If we have larned a new peer, we flood our own subscriptions as well.
+    // If we have learned new peers, we flood our own subscriptions as well.
     if (!new_peers.empty()) {
       BROKER_DEBUG("learned new peers: " << new_peers);
       for (auto& id : new_peers)
@@ -243,6 +286,45 @@ public:
       // TODO: This primarly makes sure that eventually all peers know each
       //       other. There may be more efficient ways to ensure connectivity,
       //       though.
+      flood_subscriptions();
+    }
+  }
+
+  void handle_path_revocation(peer_id_list& path, vector_timestamp path_ts,
+                              const peer_id_type& revoked_hop,
+                              const filter_type& filter) {
+    BROKER_TRACE(BROKER_ARG(path)
+                 << BROKER_ARG(path_ts) << BROKER_ARG(revoked_hop)
+                 << BROKER_ARG(filter));
+    // Drop nonsense messages.
+    if (!valid(path, path_ts))
+      return;
+    // Handle the subscription part of the message.
+    auto&& [new_peers, increased_time] = handle_update(path, path_ts, filter);
+    // Handle the recovation part of the message.
+    auto [i, added] = emplace(blacklist_, path[0], path_ts[0], revoked_hop);
+    if (added) {
+      if (!increased_time)
+        ++timestamp_;
+      auto on_drop = [this](const peer_id_type& whom) {
+        BROKER_INFO("lost peer " << whom << " as a result of path revocation");
+        dref().peer_unreachable(whom);
+      };
+      revoke(tbl_, *i, on_drop);
+    }
+    // Forward message to all other neighbors.
+    path.emplace_back(dref().id());
+    path_ts.emplace_back(timestamp_);
+    for_each_direct(tbl_, [&](auto& pid, auto& hdl) {
+      if (!contains(path, pid))
+        dref().send(hdl, atom::revoke::value, path, path_ts, revoked_hop,
+                    filter);
+    });
+    // If we have learned new peers, we flood our own subscriptions as well.
+    if (!new_peers.empty()) {
+      BROKER_DEBUG("learned new peers: " << new_peers);
+      for (auto& id : new_peers)
+        dref().peer_discovered(id);
       flood_subscriptions();
     }
   }
@@ -366,7 +448,10 @@ public:
     auto on_drop = [this](const peer_id_type& whom) {
       dref().peer_unreachable(whom);
     };
-    erase_direct(tbl_, peer_id, on_drop);
+    if (!erase_direct(tbl_, peer_id, on_drop))
+      return;
+    ++timestamp_;
+    flood_path_revocation(peer_id);
   }
 
   /// Called after removing the last path to `peer_id` from the routing table.
@@ -402,6 +487,7 @@ public:
       lift<atom::subscribe>(d, &Derived::subscribe),
       lift<atom::publish>(d, &Derived::handle_publication),
       lift<atom::subscribe>(d, &Derived::handle_filter_update),
+      lift<atom::revoke>(d, &Derived::handle_path_revocation),
       [=](atom::get, atom::id) { return dref().id(); },
       [=](atom::get, atom::peer, atom::subscriptions) {
         // For backwards-compatibility, we only report the filter of our
@@ -454,6 +540,9 @@ private:
 
   /// Stores all filters from other peers.
   std::unordered_map<peer_id_type, filter_type> peer_filters_;
+
+  /// Stores revoked paths.
+  blacklist<peer_id_type> blacklist_;
 };
 
 } // namespace broker::alm

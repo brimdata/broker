@@ -399,7 +399,7 @@ void revoke(routing_table<PeerId, Handle>& tbl, const PeerId& revoker,
 template <class PeerId, class Handle, class OnRemovePeer>
 void revoke(routing_table<PeerId, Handle>& tbl,
             const blacklist_entry<PeerId>& entry, OnRemovePeer callback) {
-  return revoke(tbl.entry.revoker, entry.ts, entry.hop, callback);
+  return revoke(tbl, entry.revoker, entry.ts, entry.hop, callback);
 }
 
 } // namespace broker::alm

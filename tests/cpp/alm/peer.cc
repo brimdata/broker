@@ -87,11 +87,21 @@ public:
     id_ = std::move(new_id);
   }
 
+  auto hdl() noexcept {
+    return caf::actor_cast<caf::actor>(self());
+  }
+
   template <class T>
   void ship_locally(const T& msg) {
     if constexpr (std::is_same<T, data_message>::value)
       buf.emplace_back(msg);
     super::ship_locally(msg);
+  }
+
+  std::vector<peer_id> shortest_path(const peer_id& to) {
+    if (auto ptr = alm::shortest_path(tbl(), to))
+      return *ptr;
+    return {};
   }
 
   std::vector<data_message> buf;
@@ -102,9 +112,6 @@ private:
 
 struct stream_peer_actor_state {
   caf::intrusive_ptr<stream_peer_manager> mgr;
-  bool connected_to(const caf::actor& hdl) const noexcept {
-    return mgr->connected_to(hdl);
-  }
 };
 
 using stream_peer_actor_type = caf::stateful_actor<stream_peer_actor_state>;
@@ -154,29 +161,47 @@ template<class ActorImpl>
 struct fixture : test_coordinator_fixture<> {
   using peer_ids = std::vector<peer_id>;
 
+  std::string A = "A";
+
+  std::string B = "B";
+
+  std::string C = "C";
+
+  std::string D = "D";
+
+  std::string E = "E";
+
+  std::string F = "F";
+
+  std::string G = "G";
+
+  std::string H = "H";
+
+  std::string I = "I";
+
+  std::string J = "J";
+
   fixture() {
-    for (auto& id : peer_ids{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J"})
+    for (auto& id : peer_ids{A, B, C, D, E, F, G, H, I, J})
       peers[id] = sys.spawn(ActorImpl{}, id);
     std::map<peer_id, peer_ids> connections{
-      {"A", {"B", "C", "J"}},      {"B", {"A", "D", "E"}},
-      {"C", {"A", "F", "G", "H"}}, {"D", {"B", "I"}},
-      {"E", {"B", "I"}},           {"F", {"C", "G"}},
-      {"I", {"D", "E", "J"}},      {"G", {"C", "F", "H", "J"}},
-      {"H", {"C", "G", "J"}},      {"J", {"A", "I", "G", "H"}},
+      {A, {B, C, J}}, {B, {A, D, E}},    {C, {A, F, G, H}}, {D, {B, I}},
+      {E, {B, I}},    {F, {C, G}},       {I, {D, E, J}},    {G, {C, F, H, J}},
+      {H, {C, G, J}}, {J, {A, I, G, H}},
     };
     for (auto& [id, links] : connections)
       for (auto& link : links)
         anon_send(peers[id], atom::peer::value, link, peers[link]);
     run();
-    BROKER_ASSERT(get("A").connected_to(peers["B"]));
-    BROKER_ASSERT(get("A").connected_to(peers["C"]));
-    BROKER_ASSERT(get("A").connected_to(peers["J"]));
-    BROKER_ASSERT(not get("A").connected_to(peers["D"]));
-    BROKER_ASSERT(not get("A").connected_to(peers["E"]));
-    BROKER_ASSERT(not get("A").connected_to(peers["F"]));
-    BROKER_ASSERT(not get("A").connected_to(peers["G"]));
-    BROKER_ASSERT(not get("A").connected_to(peers["H"]));
-    BROKER_ASSERT(not get("A").connected_to(peers["I"]));
+    BROKER_ASSERT(get(A).connected_to(peers[B]));
+    BROKER_ASSERT(get(A).connected_to(peers[C]));
+    BROKER_ASSERT(get(A).connected_to(peers[J]));
+    BROKER_ASSERT(not get(A).connected_to(peers[D]));
+    BROKER_ASSERT(not get(A).connected_to(peers[E]));
+    BROKER_ASSERT(not get(A).connected_to(peers[F]));
+    BROKER_ASSERT(not get(A).connected_to(peers[G]));
+    BROKER_ASSERT(not get(A).connected_to(peers[H]));
+    BROKER_ASSERT(not get(A).connected_to(peers[I]));
   }
 
   ~fixture() {
@@ -185,7 +210,19 @@ struct fixture : test_coordinator_fixture<> {
   }
 
   auto& get(const peer_id& id) {
-    return deref<typename ActorImpl::type>(peers[id]).state;
+    if constexpr (std::is_same<ActorImpl, stream_peer_actor>::value)
+      return *deref<typename ActorImpl::type>(peers[id]).state.mgr;
+    else
+      return deref<typename ActorImpl::type>(peers[id]).state;
+  }
+
+  template <class... Ts>
+  auto ls(Ts... xs) {
+    return std::vector<peer_id>{std::move(xs)...};
+  }
+
+  auto shortest_path(const peer_id& from, const peer_id& to) {
+    return get(from).shortest_path(to);
   }
 
   std::map<peer_id, caf::actor> peers;
@@ -216,62 +253,84 @@ bool operator==(const message_type& x, const message_pattern& y) {
 
 // -- async transport tests ----------------------------------------------------
 
-FIXTURE_SCOPE(async_peer_tests, fixture<async_peer_actor>)
-
 #define CHECK_DISTANCE(src, dst, val)                                          \
   CHECK_EQUAL(alm::distance_to(get(src).tbl(), dst), size_t{val})
+
+FIXTURE_SCOPE(async_peer_tests, fixture<async_peer_actor>)
 
 TEST(topologies with loops resolve to simple forwarding tables) {
   using peer_vec = std::vector<peer_id>;
   MESSAGE("after all links are connected, G subscribes to topic 'foo'");
-  anon_send(peers["G"], atom::subscribe::value, filter_type{topic{"foo"}});
+  anon_send(peers[G], atom::subscribe::value, filter_type{topic{"foo"}});
   run();
   MESSAGE("after the subscription, all routing tables store a distance to G");
-  CHECK_DISTANCE("A", "G", 2);
-  CHECK_DISTANCE("B", "G", 3);
-  CHECK_DISTANCE("C", "G", 1);
-  CHECK_DISTANCE("D", "G", 3);
-  CHECK_DISTANCE("E", "G", 3);
-  CHECK_DISTANCE("F", "G", 1);
-  CHECK_DISTANCE("H", "G", 1);
-  CHECK_DISTANCE("I", "G", 2);
-  CHECK_DISTANCE("J", "G", 1);
+  CHECK_DISTANCE(A, G, 2);
+  CHECK_DISTANCE(B, G, 3);
+  CHECK_DISTANCE(C, G, 1);
+  CHECK_DISTANCE(D, G, 3);
+  CHECK_DISTANCE(E, G, 3);
+  CHECK_DISTANCE(F, G, 1);
+  CHECK_DISTANCE(H, G, 1);
+  CHECK_DISTANCE(I, G, 2);
+  CHECK_DISTANCE(J, G, 1);
   MESSAGE("publishing to foo on A will send through C");
-  anon_send(peers["A"], atom::publish::value, make_data_message("foo", 42));
+  anon_send(peers[A], atom::publish::value, make_data_message("foo", 42));
   expect((atom_value, data_message), from(_).to(peers["A"]));
   expect((atom_value, message_type),
-         from(peers["A"])
-           .to(peers["C"])
-           .with(_, message_pattern{"foo", 42, peer_vec{"G"}}));
+         from(peers[A]).to(peers[C]).with(_, message_pattern{"foo", 42,
+                                                             peer_vec{G}}));
   expect((atom_value, message_type),
-         from(peers["C"])
-           .to(peers["G"])
-           .with(_, message_pattern{"foo", 42, peer_vec{"G"}}));
+         from(peers[C]).to(peers[G]).with(_, message_pattern{"foo", 42,
+                                                             peer_vec{G}}));
 }
 
 FIXTURE_SCOPE_END()
 
 // -- stream transport tests ---------------------------------------------------
 
+#define CHECK_UNREACHABLE(src, dst)                                            \
+  CHECK_EQUAL(alm::distance_to(get(src).tbl(), dst), nil)
+
 FIXTURE_SCOPE(stream_peer_tests, fixture<stream_peer_actor>)
+
+TEST(peers can revoke paths) {
+  MESSAGE("after B loses its connection to E, all paths to E go through I");
+  anon_send(peers[B], atom::unpeer::value, peers[E]);
+  run();
+  CHECK_EQUAL(shortest_path(A, E), ls(J, I, E));
+  CHECK_EQUAL(shortest_path(B, E), ls(D, I, E));
+  CHECK_EQUAL(shortest_path(D, E), ls(I, E));
+  MESSAGE("after I loses its connection to E, no paths to E remain");
+  anon_send(peers[I], atom::unpeer::value, peers[E]);
+  run();
+  CHECK_UNREACHABLE(A, E);
+  CHECK_UNREACHABLE(B, E);
+  CHECK_UNREACHABLE(C, E);
+  CHECK_UNREACHABLE(D, E);
+  CHECK_UNREACHABLE(F, E);
+  CHECK_UNREACHABLE(G, E);
+  CHECK_UNREACHABLE(H, E);
+  CHECK_UNREACHABLE(I, E);
+  CHECK_UNREACHABLE(J, E);
+}
 
 TEST(only receivers forward messages locally) {
   MESSAGE("after all links are connected, G subscribes to topic 'foo'");
-  anon_send(peers["G"], atom::subscribe::value, filter_type{topic{"foo"}});
+  anon_send(peers[G], atom::subscribe::value, filter_type{topic{"foo"}});
   run();
   MESSAGE("publishing to foo on A will result in only G having the message");
-  anon_send(peers["A"], atom::publish::value, make_data_message("foo", 42));
+  anon_send(peers[A], atom::publish::value, make_data_message("foo", 42));
   run();
-  CHECK_EQUAL(get("A").mgr->buf.size(), 0u);
-  CHECK_EQUAL(get("B").mgr->buf.size(), 0u);
-  CHECK_EQUAL(get("C").mgr->buf.size(), 0u);
-  CHECK_EQUAL(get("D").mgr->buf.size(), 0u);
-  CHECK_EQUAL(get("E").mgr->buf.size(), 0u);
-  CHECK_EQUAL(get("F").mgr->buf.size(), 0u);
-  CHECK_EQUAL(get("G").mgr->buf.size(), 1u);
-  CHECK_EQUAL(get("H").mgr->buf.size(), 0u);
-  CHECK_EQUAL(get("I").mgr->buf.size(), 0u);
-  CHECK_EQUAL(get("J").mgr->buf.size(), 0u);
+  CHECK_EQUAL(get(A).buf.size(), 0u);
+  CHECK_EQUAL(get(B).buf.size(), 0u);
+  CHECK_EQUAL(get(C).buf.size(), 0u);
+  CHECK_EQUAL(get(D).buf.size(), 0u);
+  CHECK_EQUAL(get(E).buf.size(), 0u);
+  CHECK_EQUAL(get(F).buf.size(), 0u);
+  CHECK_EQUAL(get(G).buf.size(), 1u);
+  CHECK_EQUAL(get(H).buf.size(), 0u);
+  CHECK_EQUAL(get(I).buf.size(), 0u);
+  CHECK_EQUAL(get(J).buf.size(), 0u);
 }
 
 FIXTURE_SCOPE_END()

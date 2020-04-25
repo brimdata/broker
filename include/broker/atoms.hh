@@ -76,7 +76,7 @@ using sync_point = caf::atom_constant<caf::atom("sync_point")>;
 /// --- communciation with core actor ------------------------------------------
 
 using no_events = caf::atom_constant<caf::atom("noEvents")>;
-using revoke_path = caf::atom_constant<caf::atom("revokePath")>;
+using revoke = caf::atom_constant<caf::atom("revoke")>;
 using snapshot = caf::atom_constant<caf::atom("snapshot")>;
 using subscriptions = caf::atom_constant<caf::atom("subs")>;
 

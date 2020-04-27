@@ -371,8 +371,20 @@ bool blacklisted(const std::vector<PeerId>& path,
 template <class PeerId>
 bool blacklisted(const std::vector<PeerId>& path, const vector_timestamp& ts,
                  const blacklist_entry<PeerId>& entry) {
-  return blacklisted(path, ts, entry.revoker, entry.timestamp,
-                     entry.revoked_hop);
+  return blacklisted(path, ts, entry.revoker, entry.ts, entry.hop);
+}
+
+/// Checks whether `path` is blacklisted by any entry in `entries`.
+template <class PeerId, class Container>
+std::enable_if_t<
+  std::is_same<typename Container::value_type, blacklist_entry<PeerId>>::value,
+  bool>
+blacklisted(const std::vector<PeerId>& path, const vector_timestamp& ts,
+            const Container& entries) {
+  for (const auto& entry : entries)
+    if (blacklisted(path, ts, entry))
+      return true;
+  return false;
 }
 
 /// Removes all entries form `tbl` where `blacklisted` returns true for given

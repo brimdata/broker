@@ -200,8 +200,8 @@ public:
     publish(content);
   }
 
-  /// Checks whether a path and its associated vector timestamp are non-empty
-  /// and loop-free.
+  /// Checks whether a path and its associated vector timestamp are non-empty,
+  /// loop-free and not blacklisted.
   bool valid (peer_id_list& path, vector_timestamp path_ts) {
     // Drop if empty or if path and path_ts have different sizes.
     if (path.empty()) {
@@ -228,6 +228,11 @@ public:
       BROKER_DEBUG("drop message: path contains a loop");
       return false;
     }
+    // Drop all messages that arrive after blacklisting a path.
+    if (blacklisted(path, path_ts, blacklist_)) {
+      BROKER_DEBUG("drop message from a blacklisted path");
+      return false;
+    }
     return true;
   }
 
@@ -240,17 +245,18 @@ public:
   std::pair<std::vector<peer_id_type>, bool>
   handle_update(peer_id_list& path, vector_timestamp path_ts,
                 const filter_type& filter) {
-    // The reverse path leads to the sender.
     std::vector<peer_id_type> new_peers;
+    // Extract new peers from the path.
     auto is_new = [this](const auto& id) { return !reachable(tbl_, id); };
     for (const auto& id : path)
       if (is_new(id))
         new_peers.emplace_back(id);
+    // Update the routing table.
     auto added_tbl_entry = add_or_update_path(
       tbl_, path[0], peer_id_list{path.rbegin(), path.rend()},
       vector_timestamp{path_ts.rbegin(), path_ts.rend()});
     BROKER_ASSERT(new_peers.empty() || added_tbl_entry);
-    // We increase our own timestamp only if we have changed the routing table .
+    // Increase local time, but only if we have changed the routing table.
     // Otherwise, we would cause infinite flooding, because the peers would
     // never agree on a vector time.
     if (added_tbl_entry) {
@@ -267,7 +273,7 @@ public:
   void handle_filter_update(peer_id_list& path, vector_timestamp path_ts,
                             const filter_type& filter) {
     BROKER_TRACE(BROKER_ARG(path) << BROKER_ARG(path_ts) << BROKER_ARG(filter));
-    // Handle message content (drop nonsense messages).
+    // Handle message content (drop nonsense messages and blacklisted paths).
     if (!valid(path, path_ts))
       return;
     auto new_peers = std::move(handle_update(path, path_ts, filter).first);
